@@ -1,0 +1,17 @@
+{
+  "path": "Knowledge/sample-minimal.md",
+  "id": "Knowledge/sample-minimal.md",
+  "title": "Minimal",
+  "frontmatter": {
+    "title": "Minimal",
+    "tags": [],
+    "aliases": [],
+    "links": []
+  },
+  "tags": [],
+  "wikiLinks": [],
+  "headings": [],
+  "codeBlocks": [],
+  "callouts": [],
+  "bodyFirstLine": "Body."
+}

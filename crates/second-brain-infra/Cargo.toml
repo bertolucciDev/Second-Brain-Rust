@@ -1,0 +1,24 @@
+[package]
+name = "second-brain-infra"
+version = "1.0.0"
+edition = "2021"
+description = "Second Brain Rust infra: adapters/net/core ports (SQLite store, fs, runner) + path defaults"
+publish = false
+
+[dependencies]
+second-brain-core = { path = "../second-brain-core" }
+serde_json = "1"
+thiserror = "2"
+
+# SQLite nativa bundled (FTS5 incluído via `bundled-full`) + WAL.
+# Lock cross-platform (flock/LockFileEx) para single-writer multi-processo (G1-G3).
+rusqlite = { version = "0.37", features = ["bundled-full"] }
+fs4 = "0.13"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+serde = { version = "1", features = ["derive"] }
+
+# Watcher do vault (P6/T5): notify + debounce 250ms (espelha `VaultWatcher.ts`).
+notify = "6"
+
+[dev-dependencies]
+tempfile = "3"

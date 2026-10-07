@@ -1,0 +1,44 @@
+name: Rust (P6.5 gate)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: cargo test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      # W-1/W-2 (P6.5): os testes do vault já exercitam escrita atômica
+      # (temp → fsync no handle de escrita → rename → fsync do diretório) e o
+      # watcher real com rename; no Windows validam o gate da plataforma primária.
+      - name: Vault watcher (evidência do gate)
+        run: cargo test -p second-brain-infra vault -- --nocapture
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: fmt
+        run: cargo fmt --all -- --check

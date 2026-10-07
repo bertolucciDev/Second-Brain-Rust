@@ -1,0 +1,26 @@
+{
+  "result": {
+    "resources": [
+      {
+        "uri": "second-brain://notes",
+        "name": "All Notes",
+        "description": "List of all indexed notes in the vault",
+        "mimeType": "application/json"
+      },
+      {
+        "uri": "second-brain://stats",
+        "name": "Vault Statistics",
+        "description": "Statistics about the vault",
+        "mimeType": "application/json"
+      },
+      {
+        "uri": "second-brain://config",
+        "name": "Server Configuration",
+        "description": "Current MCP server configuration",
+        "mimeType": "application/json"
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 3
+}

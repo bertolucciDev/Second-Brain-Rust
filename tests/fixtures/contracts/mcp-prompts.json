@@ -1,0 +1,30 @@
+{
+  "result": {
+    "prompts": [
+      {
+        "name": "context_summary",
+        "description": "Summarize context for a given query to help an AI agent understand relevant vault content",
+        "arguments": [
+          {
+            "name": "query",
+            "description": "What to look up in the vault",
+            "required": true
+          }
+        ]
+      },
+      {
+        "name": "search_and_read",
+        "description": "Search for notes matching a query and read the top result",
+        "arguments": [
+          {
+            "name": "query",
+            "description": "Search query",
+            "required": true
+          }
+        ]
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 4
+}

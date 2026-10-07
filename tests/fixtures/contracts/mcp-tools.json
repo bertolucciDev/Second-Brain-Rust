@@ -1,0 +1,360 @@
+{
+  "result": {
+    "tools": [
+      {
+        "name": "second_brain_search",
+        "description": "Search the vault. Uses the configured strategy (keyword/hybrid/semantic). Supports filtering by tags, wiki-links, and project. Returns matching notes with relevance scores.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Filter by tags"
+            },
+            "links": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Filter by wiki-links"
+            },
+            "project": {
+              "type": "string",
+              "description": "Filter by project ID"
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max results (default 12)"
+            },
+            "offset": {
+              "type": "number",
+              "description": "Pagination offset"
+            },
+            "strategy": {
+              "type": "string",
+              "enum": [
+                "hybrid",
+                "keyword",
+                "semantic"
+              ],
+              "description": "Override search strategy"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "second_brain_similar",
+        "description": "Semantic similarity search. Finds notes conceptually related to the query using embedding vectors. Returns results ranked by cosine similarity.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Reference text to find similar notes"
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max results (default 10)"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "second_brain_read",
+        "description": "Read a specific note by its path or ID. Returns full content, metadata, tags, links, and backlinks.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Relative path (e.g. Knowledge/architecture.md)"
+            },
+            "id": {
+              "type": "string",
+              "description": "Note ID (alternative to path)"
+            }
+          }
+        }
+      },
+      {
+        "name": "second_brain_context",
+        "description": "Retrieve relevant context for the current task. Searches the vault and returns top documents formatted for AI consumption. Best tool for RAG-style queries.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "What the agent is working on"
+            },
+            "maxDocuments": {
+              "type": "number",
+              "description": "Max documents (default from config)"
+            },
+            "includeContent": {
+              "type": "boolean",
+              "description": "Include full content (default true)"
+            },
+            "strategy": {
+              "type": "string",
+              "enum": [
+                "hybrid",
+                "keyword",
+                "semantic"
+              ],
+              "description": "Search strategy override"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "second_brain_create",
+        "description": "Create a new note. Persists to both the vault file system and the search index. Supports tags, wiki-links, and project assignment.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Relative path (e.g. Knowledge/new-topic.md)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Note title (defaults to filename)"
+            },
+            "content": {
+              "type": "string",
+              "description": "Markdown content"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Tags"
+            },
+            "links": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Wiki-link targets"
+            },
+            "project": {
+              "type": "string",
+              "description": "Project ID"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      },
+      {
+        "name": "second_brain_backlinks",
+        "description": "Find all notes that link to (backlinks) or are linked from (outgoing) a given note. Useful for understanding the knowledge graph connections.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Note path or ID"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "second_brain_stats",
+        "description": "Get vault statistics: total notes, unique tags, project count, and storage info.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "second_brain_graph",
+        "description": "Get knowledge graph structure. Optionally analyze a specific note's centrality and connections. Returns node count, edge count, and graph density.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Optional: specific note to analyze"
+            }
+          }
+        }
+      },
+      {
+        "name": "second_brain_info",
+        "description": "Get Second Brain configuration information: vault path, DB path, search strategy, and capabilities.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "second_brain_adr_create",
+        "description": "Create a new Architecture Decision Record (ADR) with context, problem, and solution.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "ADR title"
+            },
+            "context": {
+              "type": "string",
+              "description": "Decision context"
+            },
+            "problem": {
+              "type": "string",
+              "description": "Problem being solved"
+            },
+            "solution": {
+              "type": "string",
+              "description": "Chosen solution"
+            },
+            "alternatives": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Alternatives considered"
+            },
+            "consequences": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Consequences"
+            }
+          },
+          "required": [
+            "title",
+            "context",
+            "problem",
+            "solution"
+          ]
+        }
+      },
+      {
+        "name": "second_brain_adr_list",
+        "description": "List all Architecture Decision Records with status.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "second_brain_project_create",
+        "description": "Create a new project.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Project name"
+            },
+            "description": {
+              "type": "string",
+              "description": "Project description"
+            }
+          },
+          "required": [
+            "name",
+            "description"
+          ]
+        }
+      },
+      {
+        "name": "second_brain_project_list",
+        "description": "List all projects with note counts.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "second_brain_project_show",
+        "description": "Show project details and linked notes.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Project ID"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "name": "second_brain_project_link",
+        "description": "Link a note to a project.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "projectId": {
+              "type": "string",
+              "description": "Project ID"
+            },
+            "notePath": {
+              "type": "string",
+              "description": "Note path"
+            }
+          },
+          "required": [
+            "projectId",
+            "notePath"
+          ]
+        }
+      },
+      {
+        "name": "second_brain_exec",
+        "description": "Execute a shell command in the vault directory. Use for running commands like rage, docker, vercel, aws, git, etc. Commands run in the vault directory with a 60s timeout.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "Shell command to execute (e.g. 'rage -d -i ~/.age/key.txt file.age')"
+            },
+            "timeout": {
+              "type": "number",
+              "description": "Timeout in milliseconds (default: 60000, max: 300000)"
+            },
+            "env": {
+              "type": "object",
+              "description": "Additional environment variables (merged with process.env)"
+            }
+          },
+          "required": [
+            "command"
+          ]
+        }
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 2
+}

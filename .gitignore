@@ -1,0 +1,13 @@
+# Build output
+target/
+
+# Vault & Index (user data - not committed)
+**/.memoryos/
+**/index.db
+memory.config.json
+*.local.json
+
+# Environment
+.env
+.env.local
+.env.*.local

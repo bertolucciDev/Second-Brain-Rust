@@ -1,0 +1,13 @@
+[package]
+name = "second-brain-core"
+version = "1.0.0"
+edition = "2021"
+description = "Second Brain Rust core: pure domain + application + ports + config types"
+publish = false
+
+[dependencies]
+# Domain layer is intentionally std-only; serde/thiserror enter at the Application
+# layer (P2) as pure deserialization/error libs, keeping the domain untouched.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

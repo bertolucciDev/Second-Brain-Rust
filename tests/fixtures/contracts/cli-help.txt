@@ -1,0 +1,32 @@
+Usage: second-brain [options] [command]
+
+Second Brain / Segundo Cérebro - Persistent Memory Platform for AI Agents
+
+Options:
+  -V, --version             output the version number
+  -h, --help                display help for command
+
+Commands:
+  init [options]            Initialize a new Second Brain vault
+  search [options] <query>  Search notes in the vault
+  read <note>               Read a note from the vault
+  create [options] <path>   Create a new note
+  sync                      Rebuild search index from vault
+  reindex [options]         Regenerate embeddings for all notes (for semantic
+                            search)
+  graph [options]           Show knowledge graph structure and metrics
+  watch                     Watch vault for changes and keep index in sync
+  doctor                    Check vault health
+  stats                     Show vault statistics
+  reflect [options]         Create a session note reflecting on completed work
+  mcp                       Start MCP server over stdio for AI agent
+                            integration
+  adr                       Manage Architecture Decision Records
+  session                   List session history
+  project                   Manage projects
+  config [options]          View or edit configuration
+  backup [options]          Export vault and database to a ZIP archive
+  open [options] <path>     Open a note in Obsidian via obsidian:// URI
+  obsidian                  Obsidian integration tools
+  study                     Manage study notes
+  help [command]            display help for command

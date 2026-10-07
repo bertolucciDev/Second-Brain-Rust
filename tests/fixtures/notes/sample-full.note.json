@@ -1,0 +1,74 @@
+{
+  "path": "Knowledge/sample-full.md",
+  "id": "Knowledge/sample-full.md",
+  "title": "Architecture Patterns",
+  "frontmatter": {
+    "title": "Architecture Patterns",
+    "tags": [
+      "architecture",
+      "planning"
+    ],
+    "project": "second-brain",
+    "aliases": [
+      "Padrões de Arquitetura"
+    ],
+    "links": [
+      "home",
+      "roadmap"
+    ]
+  },
+  "tags": [
+    "memoryos",
+    "design",
+    "tag-in-code"
+  ],
+  "wikiLinks": [
+    {
+      "target": "ADR-001"
+    },
+    {
+      "target": "architecture",
+      "alias": "Architecture Overview"
+    },
+    {
+      "target": "db"
+    }
+  ],
+  "headings": [
+    {
+      "level": 1,
+      "text": "Architecture Patterns"
+    },
+    {
+      "level": 2,
+      "text": "Section One"
+    },
+    {
+      "level": 2,
+      "text": "Section Two"
+    },
+    {
+      "level": 3,
+      "text": "Subsection"
+    }
+  ],
+  "codeBlocks": [
+    {
+      "language": "ts",
+      "firstLine": "const x = 1; // #tag-in-code should still be captured by legacy"
+    }
+  ],
+  "callouts": [
+    {
+      "type": "note",
+      "title": "Context",
+      "content": "This is a note callout"
+    },
+    {
+      "type": "important",
+      "title": null,
+      "content": "Important callout"
+    }
+  ],
+  "bodyFirstLine": "# Architecture Patterns"
+}
