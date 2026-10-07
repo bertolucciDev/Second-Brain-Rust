@@ -6,8 +6,6 @@
 //! Funções puras recebem a origem dos dados para permitir teste cross-platform;
 //! o loader real (CLI, P7) injeta `cwd`/env.
 
-use std::path::{Path, PathBuf};
-
 /// Plataforma alvo usada na resolução de defaults (testável em qualquer host).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
@@ -31,23 +29,28 @@ pub fn resolve_default_db_path(
         }
         Platform::Unix => {
             let base = xdg_data_home
-                .map(PathBuf::from)
-                .filter(|p| !p.as_os_str().is_empty())
+                .map(str::to_string)
+                .filter(|p| !p.is_empty())
                 .unwrap_or_else(|| {
                     let home = std::env::var("HOME").unwrap_or_default();
-                    PathBuf::from(home).join(".local").join("share")
+                    format!("{home}/.local/share")
                 });
-            base.join("second-brain")
-                .join("index.db")
-                .to_string_lossy()
-                .into_owned()
+            // Separador fixo "/" (determinístico): esta branch só produz caminho
+            // quando a plataforma é Unix por CONTRATO — independente do host que
+            // executa o teste (gate roda matriz linux+windows).
+            format!(
+                "{}/second-brain/index.db",
+                base.trim_end_matches(['/', '\\'])
+            )
         }
     }
 }
 
 /// Default legado de `vaultPath`: `<cwd>/vault`.
 pub fn default_vault_path(cwd: &str) -> String {
-    Path::new(cwd).join("vault").to_string_lossy().into_owned()
+    // Mesma decisão de determinismo: produzir sempre com "/" (válido nas duas
+    // plataformas-alvo) em vez de depender do separador do host de teste.
+    format!("{}/vault", cwd.trim_end_matches(['/', '\\']))
 }
 
 /// TRUE se `child` está dentro de `parent` (aceite #15 / R-A10): usado no `doctor`

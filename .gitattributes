@@ -1,0 +1,5 @@
+# Fixtures de caracterização do legado são sensíveis a endings: o parser
+# P4 detecta frontmatter com "\n---\n"; checkout CRLF no Windows quebraria os
+# testes de paridade. Força LF em tudo (o vault real pode ter CRLF — tratamento
+# separado é assunto de hardening, fora desta fase).
+* text=auto eol=lf
