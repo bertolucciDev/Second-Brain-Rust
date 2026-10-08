@@ -18,6 +18,8 @@ use second_brain_infra::{
     NvidiaEmbed, Platform, ProcessRunner, SqliteStore, Vault,
 };
 
+mod mcp;
+
 /// Embedder "offline": sem `NVIDIA_API_KEY`, `reindex` falha explicitamente
 /// (degradação honesta — nunca embeddings sintéticos em produção) e a busca
 /// degrada para keyword via `FtsSearch` (que recebe embedder=None).
@@ -276,6 +278,13 @@ fn dispatch(args: &[String], cwd: &Path) -> Result<String> {
         let mut sink = |line: &str| println!("{line}");
         watch_command(cwd, &mut sink, None)?;
         return Ok(String::new());
+    }
+    if args.first().map(String::as_str) == Some("mcp") {
+        // stdout é o canal JSON-RPC do MCP; erros vão para stderr (sem print aqui).
+        return mcp::serve(cwd).map(|()| String::new()).map_err(|e| {
+            eprintln!("mcp: {e}");
+            e
+        });
     }
     run(args, cwd)
 }
