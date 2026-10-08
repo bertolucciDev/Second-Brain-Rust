@@ -1036,6 +1036,7 @@ mod tests {
             content: "text".into(),
             tags: vec![],
             links: vec![],
+            project: None,
         })
         .unwrap();
         let q = SearchQuery {

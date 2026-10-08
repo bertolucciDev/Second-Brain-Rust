@@ -564,3 +564,38 @@ Bin testa init→create→read→search→stats→sync→doctor(+reindex offline
 - A **lista** default de comandos/candidatos (`git`, `docker`, `aws`, `rage`,
   `vercel`) e quais rodam no Windows segue decisão de produto. O mecanismo está
   pronto: basta preencher `exec.allowed` na config.
+
+# P7f — Paridade total de shapes de retorno do MCP (contrato TS)
+
+**Data:** 2026-10-08.
+
+## Mudanças
+
+- **ToolPayload** (`mcp.rs`): enum `Json` / `Text` / `TextBlocks` mapeado para
+  blocos de conteúdo MCP. `Text` = `exec` (texto cru do legado); `TextBlocks` =
+  `context` (2 blocos: texto + meta JSON); demais = 1 bloco JSON.
+- **Shapes alinhados ao legado TS** (eram divergências de paridade, não decisões):
+  - `search`: array cru → `{total,offset,limit,items:[{id,path,title,score,
+    matchedFields,snippet,tags,links}]}`; `limit`/`offset` passam a ser honrados
+    (mapeados para `page_size`/`page`). **Era o mismatch que quebrava o cliente.**
+  - `similar`: item ganha `tags`; `path` = `note.path` (não o id).
+  - `read`: adiciona `project` e `backlinks:[{id,title,path}]`.
+  - `create`: agora `{created:true,id,path,title}` (antes devolvia a nota inteira).
+  - `backlinks`: campo `outgoingLinks` (antes `outgoing`).
+  - `stats`: `{totalNotes,uniqueTags,notesWithProject}`; `VaultStats` ganhou
+    `unique_tags` (computed em `Application::stats`).
+  - `info`: `{version,vaultPath,dbPath,searchStrategy,maxContextDocuments,
+    capabilities,embeddingModel,embeddingDim}` (+`engine`).
+  - `context`: 2 blocos de texto (`SOURCE/TITLE/TAGS/RELEVANCE` + `{count,sources}`);
+    `maxDocuments` default = `config.max_context_documents`.
+  - `adr_create`: `{created:true,id,title,status}`.
+- `note_to_json` removido (obsoleto após o realinhamento de `read`/`create`).
+
+## Verificação
+
+- **186 testes** (16 bin, 105 core, 65 infra); `clippy -D warnings` e `fmt` limpos.
+- Novos testes bin: `search_wraps_results_like_legacy`, `info_exposes_contract_fields`,
+  `context_returns_two_text_blocks` (2 blocos), `backlinks` (campo `outgoingLinks`).
+- Teste de fogo stdio real (`/tmp/opencode/fire_test.py`, embeddings NVIDIA reais):
+  **25/25 PASS** — info/create/read/search(k/h/s)/similar/context/backlinks/stats/
+  graph/adr_*/project_*/exec.

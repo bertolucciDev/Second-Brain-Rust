@@ -93,19 +93,11 @@ pub(crate) fn handle_line(line: &str, app: &mut Application) -> Result<Option<Va
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             match call_tool(name, &args, app) {
                 Ok(payload) => {
-                    // Payload string = texto cru (formato do `exec` legado);
-                    // objetos viram JSON (demais tools).
-                    let text = match &payload {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
+                    let content = payload.into_content();
                     Ok(Some(json!({
                         "jsonrpc": "2.0",
                         "id": id,
-                        "result": {
-                            "content": [{"type": "text", "text": text}],
-                            "isError": false
-                        }
+                        "result": { "content": content, "isError": false }
                     })))
                 }
                 Err(e) => Ok(Some(json!({
@@ -143,28 +135,142 @@ fn tools_list_fixture() -> Value {
 // tools/call
 // ---------------------------------------------------------------------------
 
-fn call_tool(name: &str, args: &Value, app: &mut Application) -> Result<Value> {
+/// Payload de retorno de uma tool, mapeado para os blocos de conteúdo MCP.
+/// Mantém paridade com o legado: `exec` = texto cru; `context` = 2 blocos de
+/// texto; demais = um bloco JSON.
+#[derive(Debug)]
+enum ToolPayload {
+    Json(Value),
+    Text(String),
+    TextBlocks(Vec<String>),
+}
+
+impl ToolPayload {
+    fn into_content(self) -> Value {
+        let texts = match self {
+            ToolPayload::Json(v) => vec![v.to_string()],
+            ToolPayload::Text(t) => vec![t],
+            ToolPayload::TextBlocks(ts) => ts,
+        };
+        Value::Array(
+            texts
+                .into_iter()
+                .map(|t| json!({"type": "text", "text": t}))
+                .collect(),
+        )
+    }
+
+    /// Representação única para os testes (mesma semântica do payload antigo).
+    #[cfg(test)]
+    fn into_value(self) -> Value {
+        match self {
+            ToolPayload::Json(v) => v,
+            ToolPayload::Text(t) => Value::String(t),
+            ToolPayload::TextBlocks(ts) => {
+                Value::Array(ts.into_iter().map(Value::String).collect())
+            }
+        }
+    }
+}
+
+/// Mapeia o arg `strategy` para o enum (None = default da config).
+fn strategy_arg(args: &Value) -> Option<SearchStrategy> {
+    match opt_s(args, "strategy").as_deref() {
+        Some("keyword") => Some(SearchStrategy::Keyword),
+        Some("semantic") => Some(SearchStrategy::Semantic),
+        Some("hybrid") => Some(SearchStrategy::Hybrid),
+        _ => None,
+    }
+}
+
+/// Campos de nota exigidos pelo contrato do MCP legado (path/title/tags/links).
+fn note_fields(app: &mut Application, id: &str) -> (String, String, Vec<String>, Vec<String>) {
+    match app.read_note(id) {
+        Ok(n) => (
+            n.path().to_string(),
+            n.title().to_string(),
+            n.tags().iter().map(|t| t.value().to_string()).collect(),
+            n.wiki_links()
+                .iter()
+                .map(|l| l.target().to_string())
+                .collect(),
+        ),
+        Err(_) => (String::new(), String::new(), Vec::new(), Vec::new()),
+    }
+}
+
+fn notes_ref(items: &[second_brain_core::app::contract::NoteRef]) -> Vec<Value> {
+    items
+        .iter()
+        .map(|n| json!({"path": n.path, "title": n.title}))
+        .collect()
+}
+
+fn call_tool(name: &str, args: &Value, app: &mut Application) -> Result<ToolPayload> {
     match name {
         "second_brain_search" => {
+            let limit = opt_usize(args, "limit").unwrap_or(12) as u32;
+            let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as u32;
+            let page = offset / limit.max(1) + 1;
             let q = SearchQuery {
                 query: s(args, "query"),
                 tags: vec_str(args, "tags"),
                 links: vec_str(args, "links"),
                 project: opt_s(args, "project"),
-                strategy: match opt_s(args, "strategy").as_deref() {
-                    Some("keyword") => Some(SearchStrategy::Keyword),
-                    Some("semantic") => Some(SearchStrategy::Semantic),
-                    Some("hybrid") => Some(SearchStrategy::Hybrid),
-                    _ => None,
-                },
-                ..Default::default()
+                strategy: strategy_arg(args),
+                page,
+                page_size: limit.max(1),
             };
-            Ok(serde_json::to_value(app.search(&q)?).map_err(ser_err)?)
+            let results = app.search(&q)?;
+            let mut items = Vec::with_capacity(results.len());
+            for r in &results {
+                let (path, title, tags, links) = note_fields(app, &r.note_id);
+                items.push(json!({
+                    "id": r.note_id,
+                    "path": path,
+                    "title": title,
+                    "score": r.score,
+                    "matchedFields": r.matched_fields,
+                    "snippet": r.snippet,
+                    "tags": tags,
+                    "links": links,
+                }));
+            }
+            Ok(ToolPayload::Json(json!({
+                "total": items.len(),
+                "offset": offset,
+                "limit": limit,
+                "items": items,
+            })))
         }
         "second_brain_read" => {
             let id = s_opt_most(args, &["id", "path"]);
             let note = app.read_note(&id)?;
-            Ok(note_to_json(&note))
+            let backlinks = app
+                .backlinks(note.path())
+                .map(|b| {
+                    b.backlinks
+                        .iter()
+                        .map(|n| {
+                            json!({
+                                "id": n.path.trim_end_matches(".md"),
+                                "title": n.title,
+                                "path": n.path,
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            Ok(ToolPayload::Json(json!({
+                "id": note.id().value(),
+                "path": note.path(),
+                "title": note.title(),
+                "content": note.content(),
+                "tags": note.tags().iter().map(|t| t.value()).collect::<Vec<_>>(),
+                "links": note.wiki_links().iter().map(|l| l.target()).collect::<Vec<_>>(),
+                "project": note.project_id().map(|p| p.value()),
+                "backlinks": backlinks,
+            })))
         }
         "second_brain_create" => {
             let note = app.create_note(second_brain_core::app::CreateNoteRequest {
@@ -173,127 +279,158 @@ fn call_tool(name: &str, args: &Value, app: &mut Application) -> Result<Value> {
                 content: opt_s(args, "content").unwrap_or_default(),
                 tags: vec_str(args, "tags"),
                 links: vec_str(args, "links"),
+                project: opt_s(args, "project"),
             })?;
-            Ok(note_to_json(&note))
+            Ok(ToolPayload::Json(json!({
+                "created": true,
+                "id": note.id().value(),
+                "path": note.path(),
+                "title": note.title(),
+            })))
         }
-        "second_brain_stats" => Ok(serde_json::to_value(app.stats()?).map_err(ser_err)?),
+        "second_brain_stats" => {
+            let s = app.stats()?;
+            Ok(ToolPayload::Json(json!({
+                "totalNotes": s.total_notes,
+                "uniqueTags": s.unique_tags,
+                "notesWithProject": s.linked_to_project,
+            })))
+        }
         "second_brain_graph" => {
-            let target = opt_s(args, "target");
-            Ok(serde_json::to_value(app.graph(target.as_deref())?).map_err(ser_err)?)
+            let out = app.graph(opt_s(args, "path").as_deref())?;
+            Ok(ToolPayload::Json(
+                serde_json::to_value(&out).map_err(ser_err)?,
+            ))
         }
-        "second_brain_info" => Ok(json!({
-            "name": "second-brain",
+        "second_brain_info" => Ok(ToolPayload::Json(json!({
             "version": env!("CARGO_PKG_VERSION"),
+            "vaultPath": app.config.vault_path,
+            "dbPath": app.config.db_path,
+            "searchStrategy": app.config.search_strategy,
+            "maxContextDocuments": app.config.max_context_documents,
+            "capabilities": [
+                "search", "read", "create", "context", "similar", "backlinks",
+                "stats", "graph", "info", "adr_create", "adr_list",
+                "project_create", "project_list", "project_show", "project_link", "exec"
+            ],
+            "embeddingModel": second_brain_infra::embed::DEFAULT_NVIDIA_EMBED_MODEL,
+            "embeddingDim": second_brain_infra::embed::DEFAULT_NVIDIA_EMBED_DIM,
             "engine": "rust",
-            "vaultPath": app.vault_path(),
-        })),
+        }))),
         "second_brain_adr_create" => {
             let adr = app.create_adr(AdrCreateRequest {
                 title: s(args, "title"),
-                context: opt_s(args, "context").unwrap_or_default(),
-                problem: opt_s(args, "problem").unwrap_or_default(),
-                solution: opt_s(args, "solution").unwrap_or_default(),
+                context: s(args, "context"),
+                problem: s(args, "problem"),
+                solution: s(args, "solution"),
                 alternatives: vec_str(args, "alternatives"),
                 consequences: vec_str(args, "consequences"),
             })?;
-            Ok(json!({
+            Ok(ToolPayload::Json(json!({
+                "created": true,
                 "id": adr.id().value(),
-                "number": adr.number(),
                 "title": adr.title(),
-                "status": adr.status().as_str(),
-            }))
+                "status": "proposed",
+            })))
         }
         "second_brain_similar" => {
             let limit = opt_usize(args, "limit").unwrap_or(10);
             let results = app.similar(&s(args, "query"), limit)?;
-            let items = results
-                .iter()
-                .map(|r| {
-                    let title = app
-                        .read_note(&r.note_id)
-                        .map(|n| n.title().to_string())
-                        .unwrap_or_default();
-                    json!({
-                        "id": r.note_id,
-                        "path": r.note_id,
-                        "title": title,
-                        "score": r.score,
-                        "snippet": r.snippet,
-                    })
-                })
-                .collect::<Vec<_>>();
-            Ok(json!({ "total": items.len(), "items": items }))
+            let mut items = Vec::with_capacity(results.len());
+            for r in &results {
+                let (path, title, tags, _) = note_fields(app, &r.note_id);
+                items.push(json!({
+                    "id": r.note_id,
+                    "path": path,
+                    "title": title,
+                    "score": r.score,
+                    "snippet": r.snippet,
+                    "tags": tags,
+                }));
+            }
+            Ok(ToolPayload::Json(
+                json!({"total": items.len(), "items": items}),
+            ))
         }
         "second_brain_context" => {
             let query = s(args, "query");
-            let max_docs = opt_usize(args, "maxDocuments").unwrap_or(5);
+            let max_docs = opt_usize(args, "maxDocuments")
+                .unwrap_or(app.config.max_context_documents as usize);
             let include_content = args
                 .get("includeContent")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
-            let strategy = match opt_s(args, "strategy").as_deref() {
-                Some("keyword") => Some(SearchStrategy::Keyword),
-                Some("semantic") => Some(SearchStrategy::Semantic),
-                Some("hybrid") => Some(SearchStrategy::Hybrid),
-                _ => None,
+            let docs = app.context(&query, max_docs, include_content, strategy_arg(args))?;
+            let context_text = if docs.is_empty() {
+                "No relevant documents found.".to_string()
+            } else {
+                docs.iter()
+                    .map(|d| {
+                        let tags = if d.tags.is_empty() {
+                            "none".to_string()
+                        } else {
+                            d.tags.join(", ")
+                        };
+                        format!(
+                            "SOURCE: {}\nTITLE: {}\nTAGS: {}\nRELEVANCE: {}\n\n{}\n\n---",
+                            d.source, d.title, tags, d.relevance, d.content
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
             };
-            let docs = app.context(&query, max_docs, include_content, strategy)?;
-            let sources = docs.iter().map(|d| d.source.clone()).collect::<Vec<_>>();
-            let context_text = docs
-                .iter()
-                .map(|d| {
-                    format!(
-                        "SOURCE: {}\nTITLE: {}\nTAGS: {}\nRELEVANCE: {}\n\n{}\n\n---",
-                        d.source,
-                        d.title,
-                        d.tags.join(", "),
-                        d.relevance,
-                        d.content,
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            Ok(json!({
-                "context": context_text,
+            let meta = json!({
                 "count": docs.len(),
-                "sources": sources,
-            }))
+                "sources": docs.iter().map(|d| d.source.clone()).collect::<Vec<_>>(),
+            });
+            Ok(ToolPayload::TextBlocks(vec![
+                context_text,
+                meta.to_string(),
+            ]))
         }
         "second_brain_backlinks" => {
-            let target = s_opt_most(args, &["path", "id"]);
-            let out = app.backlinks(&target)?;
-            Ok(serde_json::to_value(&out).map_err(ser_err)?)
+            let out = app.backlinks(&s(args, "path"))?;
+            Ok(ToolPayload::Json(json!({
+                "note": {"path": out.note.path, "title": out.note.title},
+                "backlinks": notes_ref(&out.backlinks),
+                "outgoingLinks": notes_ref(&out.outgoing),
+                "total": out.total,
+            })))
         }
         "second_brain_adr_list" => {
             let items = app.adr_list()?;
-            Ok(json!({ "total": items.len(), "items": items }))
+            Ok(ToolPayload::Json(
+                json!({ "total": items.len(), "items": items }),
+            ))
         }
         "second_brain_project_create" => {
             let project =
                 app.create_project(&s(args, "name"), &s(args, "description"), None, None, None)?;
-            Ok(json!({
+            Ok(ToolPayload::Json(json!({
                 "created": true,
                 "id": project.id().value(),
                 "name": s(args, "name"),
-            }))
+            })))
         }
         "second_brain_project_list" => {
             let items = app.project_list()?;
-            Ok(serde_json::to_value(&items)
-                .map_err(ser_err)
-                .map(|v| json!({ "total": items.len(), "items": v }))?)
+            Ok(ToolPayload::Json(
+                json!({ "total": items.len(), "items": items }),
+            ))
         }
         "second_brain_project_show" => {
             let out = app.project_show(&s(args, "id"))?;
-            Ok(serde_json::to_value(&out).map_err(ser_err)?)
+            Ok(ToolPayload::Json(
+                serde_json::to_value(&out).map_err(ser_err)?,
+            ))
         }
         "second_brain_project_link" => {
             let note = app.set_project(&s(args, "notePath"), &s(args, "projectId"))?;
-            Ok(json!({
+            Ok(ToolPayload::Json(json!({
                 "linked": true,
                 "note": note.path(),
                 "project": s(args, "projectId"),
-            }))
+            })))
         }
         "second_brain_exec" => {
             // Política FREEZE 3 (F24): sem `env` injetável pelo chamador.
@@ -316,7 +453,7 @@ fn call_tool(name: &str, args: &Value, app: &mut Application) -> Result<Value> {
                 parts.push(format!("stderr:\n{stderr}"));
             }
             parts.push(format!("exit code: {}", out.exit_code));
-            Ok(json!(parts.join("\n\n")))
+            Ok(ToolPayload::Text(parts.join("\n\n")))
         }
         other => Err(AppError::InvalidInput(format!(
             "tool '{other}' ainda não implementada na falha de migração Rust (P7) — \
@@ -324,18 +461,6 @@ fn call_tool(name: &str, args: &Value, app: &mut Application) -> Result<Value> {
         ))),
     }
 }
-
-fn note_to_json(note: &second_brain_core::domain::entities::Note) -> Value {
-    json!({
-        "id": note.id().value(),
-        "path": note.path(),
-        "title": note.title(),
-        "content": note.content(),
-        "tags": note.tags().iter().map(|t| t.value()).collect::<Vec<_>>(),
-        "links": note.wiki_links().iter().map(|l| l.target()).collect::<Vec<_>>(),
-    })
-}
-
 fn ser_err(e: serde_json::Error) -> AppError {
     AppError::Other(format!("serialize: {e}"))
 }
@@ -405,6 +530,7 @@ mod tests {
             content: "no match here, just filler words".into(),
             tags: vec!["backlog".into()],
             links: vec![],
+            project: None,
         })
         .unwrap();
         app.create_note(CreateNoteRequest {
@@ -413,6 +539,7 @@ mod tests {
             content: "launch gamma protocol someday".into(),
             tags: vec!["adr".into(), "status-accepted".into()],
             links: vec![],
+            project: None,
         })
         .unwrap();
         app.create_note(CreateNoteRequest {
@@ -421,13 +548,14 @@ mod tests {
             content: "the quick brown fox leaps over the dog".into(),
             tags: vec!["design".into(), "adr".into(), "status-proposed".into()],
             links: vec!["b".into(), "c".into()],
+            project: None,
         })
         .unwrap();
         app
     }
 
     fn call(name: &str, args: &Value, app: &mut Application) -> Value {
-        call_tool(name, args, app).unwrap()
+        call_tool(name, args, app).unwrap().into_value()
     }
 
     #[test]
@@ -445,18 +573,68 @@ mod tests {
     }
 
     #[test]
-    fn context_formats_docs_and_sources() {
+    fn context_returns_two_text_blocks() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = setup_app(&dir);
-        let out = call(
+        let payload = call_tool(
             "second_brain_context",
             &json!({"query": "brown", "maxDocuments": 3, "includeContent": true}),
             &mut app,
+        )
+        .unwrap();
+        let blocks = match payload {
+            ToolPayload::TextBlocks(b) => b,
+            other => panic!("context deve devolver 2 blocos de texto, got {other:?}"),
+        };
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks[0].contains("SOURCE: Knowledge/a.md"));
+        assert!(blocks[0].contains("Alpha engine"));
+        let meta: Value = serde_json::from_str(&blocks[1]).unwrap();
+        assert!(meta["count"].as_u64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn search_wraps_results_like_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+        let out = call(
+            "second_brain_search",
+            &json!({"query": "brown", "limit": 5}),
+            &mut app,
         );
-        assert!(out["count"].as_u64().unwrap() >= 1);
-        let text = out["context"].as_str().unwrap();
-        assert!(text.contains("SOURCE: Knowledge/a.md"));
-        assert!(text.contains("Alpha engine"));
+        assert_eq!(out["offset"], 0);
+        assert_eq!(out["limit"], 5);
+        assert!(out["total"].is_number());
+        let items = out["items"].as_array().unwrap();
+        assert!(!items.is_empty());
+        let first = &items[0];
+        assert!(first["id"].is_string());
+        assert!(first["path"].is_string());
+        assert!(first["title"].is_string());
+        assert!(first["score"].is_number());
+        assert!(first["matchedFields"].is_array());
+        assert!(first["tags"].is_array());
+        assert!(first["links"].is_array());
+    }
+
+    #[test]
+    fn info_exposes_contract_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+        let out = call("second_brain_info", &json!({}), &mut app);
+        for key in [
+            "version",
+            "vaultPath",
+            "dbPath",
+            "searchStrategy",
+            "maxContextDocuments",
+            "capabilities",
+            "embeddingModel",
+            "embeddingDim",
+        ] {
+            assert!(!out[key].is_null(), "info.{key} ausente: {out}");
+        }
+        assert_eq!(out["embeddingDim"], 2048);
     }
 
     #[test]
@@ -472,7 +650,7 @@ mod tests {
         let backlinks = out["backlinks"].as_array().unwrap();
         assert_eq!(backlinks.len(), 1);
         assert_eq!(backlinks[0]["path"], "Knowledge/a.md");
-        assert!(out["outgoing"].as_array().unwrap().is_empty());
+        assert!(out["outgoingLinks"].as_array().unwrap().is_empty());
         assert_eq!(out["total"].as_u64().unwrap(), 1);
     }
 
@@ -522,6 +700,32 @@ mod tests {
         assert_eq!(link["project"], pid);
         let show2 = call("second_brain_project_show", &json!({"id": pid}), &mut app);
         assert_eq!(show2["notes"].as_u64().unwrap(), 3);
+    }
+
+    #[test]
+    fn create_with_project_arg_links_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+        let proj = call(
+            "second_brain_project_create",
+            &json!({"name": "Proj X", "description": "d"}),
+            &mut app,
+        );
+        let pid = proj["id"].as_str().unwrap().to_string();
+
+        // `project` no create deve vincular a nota (contrato do MCP legado).
+        let out = call(
+            "second_brain_create",
+            &json!({"path": "Knowledge/w.md", "content": "c", "project": pid}),
+            &mut app,
+        );
+        assert_eq!(out["path"], "Knowledge/w.md");
+        let show = call("second_brain_project_show", &json!({"id": pid}), &mut app);
+        assert!(show["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["path"] == "Knowledge/w.md"));
     }
 
     #[test]

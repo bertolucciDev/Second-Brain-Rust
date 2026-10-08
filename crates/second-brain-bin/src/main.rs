@@ -123,6 +123,7 @@ fn run(args: &[String], cwd: &Path) -> Result<String> {
             let content = p.values.get("content").cloned().unwrap_or_default();
             let tags = split_list(p.values.get("tags"));
             let links = split_list(p.values.get("links"));
+            let project = p.values.get("project").cloned();
             let mut app = build_app(cwd)?;
             let note = app.create_note(CreateNoteRequest {
                 path: path.clone(),
@@ -130,6 +131,7 @@ fn run(args: &[String], cwd: &Path) -> Result<String> {
                 content,
                 tags,
                 links,
+                project,
             })?;
             Ok(format!(
                 "criada: {} (id {})",

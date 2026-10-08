@@ -26,6 +26,7 @@ pub struct CreateNoteRequest {
     pub content: String,
     pub tags: Vec<String>,
     pub links: Vec<String>,
+    pub project: Option<String>,
 }
 
 /// Requisição de criação de ADR (espelha `ADR.create` do CLI `adr create`).
@@ -318,6 +319,12 @@ impl Application {
                 .trim_end_matches(".md")
                 .to_string()
         });
+        let project_id = req
+            .project
+            .as_deref()
+            .filter(|p| !p.trim().is_empty())
+            .map(ProjectId::create)
+            .transpose()?;
         let note = Note::create(
             &req.path,
             &title,
@@ -325,7 +332,7 @@ impl Application {
             None,
             &req.tags.iter().map(String::as_str).collect::<Vec<_>>(),
             &req.links.iter().map(String::as_str).collect::<Vec<_>>(),
-            None,
+            project_id,
             None,
         )?;
         let file_content = note.to_markdown();
@@ -846,14 +853,17 @@ impl Application {
     /// `stats` — Vault statistics (CLI `stats`).
     pub fn stats(&mut self) -> Result<VaultStats> {
         let total = self.store.count_notes()?;
-        let linked = self
-            .store
-            .all_notes()?
-            .iter()
-            .filter(|n| n.project_id().is_some())
-            .count();
+        let notes = self.store.all_notes()?;
+        let linked = notes.iter().filter(|n| n.project_id().is_some()).count();
+        let mut tags: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for n in &notes {
+            for t in n.tags() {
+                tags.insert(t.value());
+            }
+        }
         Ok(VaultStats {
             total_notes: total,
+            unique_tags: tags.len(),
             linked_to_project: linked,
             index_size_kb: None,
         })
@@ -1263,6 +1273,7 @@ mod tests {
                 content: "Hello world".into(),
                 tags: vec!["memoryos".into()],
                 links: vec!["beta".into()],
+                project: None,
             })
             .unwrap();
         assert_eq!(note.title(), "Alpha");
@@ -1289,6 +1300,7 @@ mod tests {
                 content: "".into(),
                 tags: vec![],
                 links: vec![],
+                project: None,
             })
             .unwrap();
         assert_eq!(note.title(), "Brainstorm");
@@ -1303,6 +1315,7 @@ mod tests {
             content: "x".into(),
             tags: vec!["t1".into()],
             links: vec![],
+            project: None,
         })
         .unwrap();
 
@@ -1325,6 +1338,7 @@ mod tests {
             content: "corpo".into(),
             tags: vec!["t".into()],
             links: vec![],
+            project: None,
         })
         .unwrap();
         // Fonte de verdade: o arquivo existe e carrega o FM canônico (@toMarkdown).
@@ -1343,6 +1357,7 @@ mod tests {
             content: "v1".into(),
             tags: vec!["a".into()],
             links: vec![],
+            project: None,
         })
         .unwrap();
         app.update_content("Knowledge/k", "v2 editado").unwrap();
@@ -1361,6 +1376,7 @@ mod tests {
             content: "original".into(),
             tags: vec![],
             links: vec![],
+            project: None,
         })
         .unwrap();
         // Edição externa no arquivo (fora do app) após a criação.
@@ -1386,6 +1402,7 @@ mod tests {
             content: "um".into(),
             tags: vec!["t1".into()],
             links: vec![],
+            project: None,
         })
         .unwrap();
         app.update_content("Knowledge/seq", "dois").unwrap();
@@ -1612,6 +1629,7 @@ mod tests {
             content: "alpha".into(),
             tags: vec![],
             links: vec![],
+            project: None,
         })
         .unwrap();
         assert_eq!(counter.get(), 1, "create_indexa_exatamente uma vez");
@@ -1639,6 +1657,7 @@ mod tests {
             content: "v1".into(),
             tags: vec![],
             links: vec![],
+            project: None,
         })
         .unwrap();
         assert_eq!(counter.get(), 1);
@@ -1756,6 +1775,7 @@ mod tests {
             content: "x".into(),
             tags: vec![],
             links: vec![],
+            project: None,
         })
         .unwrap();
         // 2) falha dentro da tx (search.index falha) → rollback
@@ -1765,6 +1785,7 @@ mod tests {
             content: "vai falhar".into(),
             tags: vec![],
             links: vec![],
+            project: None,
         });
         assert!(err.is_err(), "a falha interna deve propagar");
         assert!(
@@ -1778,6 +1799,7 @@ mod tests {
             content: "funciona".into(),
             tags: vec![],
             links: vec![],
+            project: None,
         })
         .unwrap();
         assert!(app.store.get_note("depois").unwrap().is_some());
@@ -1873,6 +1895,7 @@ mod tests {
             content: "".into(),
             tags: vec![],
             links: vec![],
+            project: None,
         })
         .unwrap();
         app.create_note(CreateNoteRequest {
@@ -1881,6 +1904,7 @@ mod tests {
             content: "".into(),
             tags: vec![],
             links: vec!["a".into()],
+            project: None,
         })
         .unwrap();
 
@@ -1958,6 +1982,7 @@ mod tests {
             content: "the quick brown fox".into(),
             tags: vec!["design".into()],
             links: vec![],
+            project: None,
         })
         .unwrap();
         app.create_note(CreateNoteRequest {
@@ -1966,6 +1991,7 @@ mod tests {
             content: "no match here".into(),
             tags: vec!["backlog".into()],
             links: vec![],
+            project: None,
         })
         .unwrap();
 
@@ -1989,6 +2015,7 @@ mod tests {
             content: "alpha body".into(),
             tags: vec!["design".into()],
             links: vec!["b".into(), "c".into()],
+            project: None,
         })
         .unwrap();
         app.create_note(CreateNoteRequest {
@@ -1997,6 +2024,7 @@ mod tests {
             content: "beta body".into(),
             tags: vec!["adr".into(), "status-proposed".into()],
             links: vec![],
+            project: None,
         })
         .unwrap();
         app.create_note(CreateNoteRequest {
@@ -2005,6 +2033,7 @@ mod tests {
             content: "gamma body".into(),
             tags: vec!["adr".into(), "status-accepted".into()],
             links: vec![],
+            project: None,
         })
         .unwrap();
 
@@ -2064,6 +2093,7 @@ mod tests {
             content: "zeta body".into(),
             tags: vec![],
             links: vec![],
+            project: None,
         })
         .unwrap();
         app.set_project("Knowledge/z", &pid).unwrap();
@@ -2129,6 +2159,25 @@ mod tests {
     }
 
     #[test]
+    fn create_note_with_project_sets_id_and_frontmatter() {
+        let mut app = test_app();
+        let note = app
+            .create_note(CreateNoteRequest {
+                path: "Knowledge/p.md".into(),
+                title: Some("P".into()),
+                content: "body".into(),
+                tags: vec![],
+                links: vec![],
+                project: Some("alpha-proj".into()),
+            })
+            .unwrap();
+        assert_eq!(note.project_id().map(|p| p.value()), Some("alpha-proj"));
+        assert!(note.to_markdown().contains("project: \"alpha-proj\""));
+        // a nota criada com projeto aparece no project_show.
+        assert_eq!(app.project_show("alpha-proj").unwrap().notes, 1);
+    }
+
+    #[test]
     fn doctor_warns_when_db_path_inside_vault() {
         let mut app = test_app(); // dbPath = /vault/.memoryos/index.db (dentro do vault)
         let findings = app.doctor().unwrap();
@@ -2170,6 +2219,7 @@ mod tests {
                 content: "body".into(),
                 tags: vec![],
                 links: vec![],
+                project: None,
             })
             .unwrap();
         assert_eq!(note.path(), "ADR/ADR-0001.md");

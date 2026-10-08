@@ -68,6 +68,7 @@ pub struct GraphOutput {
 #[serde(rename_all = "camelCase")]
 pub struct VaultStats {
     pub total_notes: usize,
+    pub unique_tags: usize,
     pub linked_to_project: usize,
     /// Tamanho do banco em KB (None enquanto a infra não fornecer (P3)).
     #[serde(skip_serializing_if = "Option::is_none")]
