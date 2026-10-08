@@ -6,6 +6,12 @@
 //! Funções puras recebem a origem dos dados para permitir teste cross-platform;
 //! o loader real (CLI, P7) injeta `cwd`/env.
 
+use std::path::PathBuf;
+
+use second_brain_core::app::error::{AppError, ConfigError, Result};
+use second_brain_core::app::ports::ConfigStore;
+use serde_json::Value;
+
 /// Plataforma alvo usada na resolução de defaults (testável em qualquer host).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
@@ -59,6 +65,61 @@ pub fn db_path_inside_vault(db_path: &str, vault_path: &str) -> bool {
     second_brain_core::app::paths::path_is_inside(db_path, vault_path)
 }
 
+// Erros voltados ao loader do bin (P7): o core embrulha em AppError::Config.
+fn cfg_err(msg: String) -> AppError {
+    AppError::Config(ConfigError::Parsing(msg))
+}
+
+/// Adapter `ConfigStore` real (P7): lê/grava `memory.config.json` no disco.
+/// `load` de arquivo ausente → objeto vazio (defaults do core). Escrita
+/// atômica (temp + rename), mesma disciplina do vault.
+pub struct FsConfigStore {
+    path: PathBuf,
+}
+
+impl FsConfigStore {
+    pub fn new(path: PathBuf) -> Self {
+        FsConfigStore { path }
+    }
+}
+
+impl ConfigStore for FsConfigStore {
+    fn load(&mut self) -> Result<Value> {
+        match std::fs::read_to_string(&self.path) {
+            Ok(raw) => serde_json::from_str(&raw).map_err(|e| {
+                cfg_err(format!(
+                    "falha ao fazer parse de {}: {e}",
+                    self.path.display()
+                ))
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Ok(Value::Object(serde_json::Map::new()))
+            }
+            Err(e) => Err(cfg_err(format!(
+                "falha ao ler {}: {e}",
+                self.path.display()
+            ))),
+        }
+    }
+
+    fn save(&mut self, raw: &Value) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| cfg_err(format!("falha ao criar diretório: {e}")))?;
+        }
+        let tmp = self.path.with_extension("json.tmp");
+        let text = serde_json::to_string_pretty(raw)
+            .map_err(|e| cfg_err(format!("falha ao serializar config: {e}")))?;
+        std::fs::write(&tmp, text)
+            .map_err(|e| cfg_err(format!("falha ao gravar temp {}: {e}", tmp.display())))?;
+        std::fs::rename(&tmp, &self.path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            cfg_err(format!("falha ao substituir {}: {e}", self.path.display()))
+        })?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,5 +166,19 @@ mod tests {
             "/vault"
         ));
         assert!(!db_path_inside_vault("/vault2/index.db", "/vault"));
+    }
+
+    #[test]
+    fn fs_config_store_roundtrips_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("memory.config.json");
+        let mut store = FsConfigStore::new(cfg.clone());
+        // Arquivo ausente → objeto vazio (defaults).
+        assert_eq!(store.load().unwrap(), serde_json::json!({}));
+        let value = serde_json::json!({"vaultPath": "/v", "dbPath": "/d/index.db"});
+        store.save(&value).unwrap();
+        assert_eq!(store.load().unwrap(), value);
+        assert!(cfg.is_file());
+        assert!(!dir.path().join("memory.config.json.tmp").exists());
     }
 }

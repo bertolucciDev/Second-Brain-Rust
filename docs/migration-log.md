@@ -449,3 +449,28 @@ hybrid **sem** embedder → keyword + `degraded`; degradação semantic → idem
 | D-P6.5-1 | W-1 execução Windows | padrão problemático removido do código; execução real em Windows indisponível neste ambiente | **DESCONHECIDO** (runtime) |
 | D-P6.5-2 | W-2 execução Windows | mapeamento `Both → Deleted+Created` adicionado e coberto por unit-test sintético; stream real de eventos do Windows não executável aqui | **DESCONHECIDO** (runtime) |
 | D-P6.5-3 | A-11 | `create_note` sobrescrevendo path existente = paridade com legado | PARIDADE |
+
+## P7 — Binário `memory` (wiring CLI end-to-end)
+
+**Data:** 2026-10-07. **Escopo:** compor os adapters reais sobre o `Application` (restrições da P6.5 mantidas: sem MCP/exec, sem alteração de contratos).
+
+### Implementado
+
+- Infra: `FsConfigStore` (load/save atômico de `memory.config.json`) e `ProcessRunner` (std::process com timeout por `try_wait`), ambos com testes.
+- Bin `second-brain-bin` (`memory`): `init`, `create`, `read`, `search`, `sync`, `watch`, `stats`, `doctor`, `reindex [--force]`; `run()` testável (retorna texto); `dispatch`/`main` só adaptam argv/exit code; `watch` em loop com sink + `max_events` para teste.
+- Composição: `SqliteStore::open` (FileLock exclusivo) → `shared_connection` → `FtsSearch` com `NvidiaEmbed::from_env()` (None → degrade keyword); `NullEmbed` no `Application` quando sem chave (reindex falha honestamente).
+- Config: arquivo do cwd ou defaults da plataforma (vault=<cwd>/vault; db fora do vault por `resolve_default_db_path`); merge via `Config::from_json().merge_defaults()` + `validate()`.
+
+### Defeito de contrato encontrado na integração (IDENTITY)
+
+`Note::create` não normalizava o id; o parser P4 "strippa" `.md`. No fluxo real (create via CLI → sync), ids duplos (`Knowledge/x.md` vs `Knowledge/x`) quebravam UNIQUE(path). Fix: `Note::create` faz `id = path.strip_suffix(".md")` (idempotente, path intacto); `apply_vault_event` deleta/remove pelo id canônico; expectativas de teste atualizadas para o id canônico. **Classificação:** correção de bug (alinhamento ao FREEZE), não mudança de contrato.
+
+### Evidência de validação
+
+| Comando | Resultado |
+|---|---|
+| `cargo test --workspace` | **163 testes ok** (bin 3, core 96, infra 64) |
+| `cargo clippy --all-targets -- -D warnings` | limpo |
+| `cargo fmt --all -- --check` | limpo |
+
+Bin testa init→create→read→search→stats→sync→doctor(+reindex offline erra honestamente) e watch com evento real via fs em tempdir.

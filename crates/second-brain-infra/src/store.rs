@@ -707,11 +707,11 @@ mod tests {
         let mut store2 = SqliteStore::new();
         store2.open(db.to_str().unwrap()).unwrap();
         assert!(
-            store2.get_note("t.md").unwrap().is_none(),
+            store2.get_note("t").unwrap().is_none(),
             "linhas não commitadas não podem sobreviver ao restart"
         );
         store2.put_note(&sample_note("t.md", "T", None)).unwrap();
-        assert!(store2.get_note("t.md").unwrap().is_some());
+        assert!(store2.get_note("t").unwrap().is_some());
         store2.close();
     }
 
@@ -766,9 +766,9 @@ mod tests {
 
         let note = sample_note("Knowledge/A.md", "Alpha", Some("B"));
         store.put_note(&note).unwrap();
-        // NoteId::create não normaliza `.md` — id bruto = path (como no legado);
-        // a normalização canônica é responsabilidade da camada de aplicação.
-        let got = store.get_note("Knowledge/A.md").unwrap().unwrap();
+        // IDENTITY (FREEZE): id canônico = path sem `.md`; arquivo mantém o
+        // sufixo. A normalização ocorre em `Note::create` (domínio).
+        let got = store.get_note("Knowledge/A").unwrap().unwrap();
         assert_eq!(got.title(), "Alpha");
         assert_eq!(got.path(), "Knowledge/A.md");
         assert_eq!(got.tags().len(), 2);
@@ -776,9 +776,9 @@ mod tests {
         assert_eq!(got.metadata(), note.metadata());
 
         assert_eq!(store.count_notes().unwrap(), 1);
-        store.delete_note("Knowledge/A.md").unwrap();
+        store.delete_note("Knowledge/A").unwrap();
         assert_eq!(store.count_notes().unwrap(), 0);
-        assert!(store.get_note("Knowledge/A.md").unwrap().is_none());
+        assert!(store.get_note("Knowledge/A").unwrap().is_none());
         store.close();
     }
 
@@ -797,14 +797,14 @@ mod tests {
         let row: (String, Option<String>) = {
             let conn = store.conn.as_ref().unwrap();
             conn.query_row(
-                "SELECT target, target_id FROM link_edges WHERE source_id='Ideas/Use.md'",
+                "SELECT target, target_id FROM link_edges WHERE source_id='Ideas/Use'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap()
         };
         assert_eq!(row.0, "Beacon");
-        assert_eq!(row.1.as_deref(), Some("Knowledge/Beacon.md"));
+        assert_eq!(row.1.as_deref(), Some("Knowledge/Beacon"));
         store.close();
     }
 

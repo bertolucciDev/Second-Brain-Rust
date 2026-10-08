@@ -1,3 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/second-brain-core", "crates/second-brain-infra"]
+members = [
+    "crates/second-brain-core",
+    "crates/second-brain-infra",
+    "crates/second-brain-bin",
+]

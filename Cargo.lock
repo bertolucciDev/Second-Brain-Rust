@@ -814,6 +814,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "second-brain-bin"
+version = "1.0.0"
+dependencies = [
+ "second-brain-core",
+ "second-brain-infra",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "second-brain-core"
 version = "1.0.0"
 dependencies = [

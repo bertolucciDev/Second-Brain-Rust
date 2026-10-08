@@ -1,0 +1,18 @@
+[package]
+name = "second-brain-bin"
+version = "1.0.0"
+edition = "2021"
+description = "Second Brain Rust CLI (`memory`) — wiring bin → Application → infra"
+publish = false
+
+[[bin]]
+name = "memory"
+path = "src/main.rs"
+
+[dependencies]
+second-brain-core = { path = "../second-brain-core" }
+second-brain-infra = { path = "../second-brain-infra" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

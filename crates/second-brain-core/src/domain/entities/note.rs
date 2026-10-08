@@ -30,7 +30,11 @@ impl Note {
         project_id: Option<ProjectId>,
         source: Option<&str>,
     ) -> Result<Note> {
-        let id = NoteId::create(path)?;
+        // IDENTITY (FREEZE): o id canônico é o caminho relativo **sem** `.md`;
+        // `path` mantém o sufixo (é o arquivo). O parser P4 já "strippa" e o
+        // `read_note` resolve com/sem sufixo — criar com duas formas quebraria
+        // o UNIQUE(path) do banco no sync (defeito detectado na P7).
+        let id = NoteId::create(path.strip_suffix(".md").unwrap_or(path))?;
         let tags: Vec<Tag> = tags.iter().map(|t| Tag::create(t)).collect::<Result<_>>()?;
         let wiki_links: Vec<WikiLink> = links
             .iter()
@@ -358,7 +362,7 @@ mod tests {
 
     fn test_note() -> Note {
         Note::create(
-            "Knowledge/test.md",
+            "Knowledge/test",
             "Test Note",
             "Content here",
             None,
@@ -373,8 +377,8 @@ mod tests {
     #[test]
     fn creates_note_with_tags_and_links() {
         let note = test_note();
-        assert_eq!(note.path(), "Knowledge/test.md");
-        assert_eq!(note.id().value(), "Knowledge/test.md");
+        assert_eq!(note.path(), "Knowledge/test");
+        assert_eq!(note.id().value(), "Knowledge/test");
         assert_eq!(note.title(), "Test Note");
         assert_eq!(note.content(), "Content here");
         let tags: Vec<&str> = note.tags().iter().map(|t| t.value()).collect();

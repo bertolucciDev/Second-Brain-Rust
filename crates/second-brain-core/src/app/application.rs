@@ -514,15 +514,18 @@ impl Application {
     pub fn apply_vault_event(&mut self, ev: &VaultEvent) -> Result<()> {
         match ev.event_type {
             VaultEventType::Deleted => {
-                self.store.delete_note(&ev.path)?;
-                self.search.remove(&ev.path)?;
+                // id canônico sem `.md` (IDENTITY); file_state é chaveada por path.
+                let id = ev.path.trim_end_matches(".md");
+                self.store.delete_note(id)?;
+                self.search.remove(id)?;
                 self.store.delete_file_state(&ev.path)?;
                 Ok(())
             }
             VaultEventType::Renamed => {
                 if let Some(old) = ev.old_path.clone() {
-                    self.store.delete_note(&old)?;
-                    self.search.remove(&old)?;
+                    let old_id = old.trim_end_matches(".md");
+                    self.store.delete_note(old_id)?;
+                    self.search.remove(old_id)?;
                     self.store.delete_file_state(&old)?;
                 }
                 self.sync_file(&ev.path)
@@ -1155,7 +1158,7 @@ mod tests {
         })
         .unwrap();
         assert!(
-            app.store.get_note("Knowledge/n.md").unwrap().is_some(),
+            app.store.get_note("Knowledge/n").unwrap().is_some(),
             "Created deveria indexar a nota"
         );
         assert!(
@@ -1182,7 +1185,7 @@ mod tests {
         })
         .unwrap();
         assert!(
-            app.store.get_note("Knowledge/n.md").unwrap().is_none(),
+            app.store.get_note("Knowledge/n").unwrap().is_none(),
             "Deleted deveria remover a nota"
         );
         assert!(
@@ -1206,8 +1209,8 @@ mod tests {
             old_path: Some("Knowledge/velha.md".into()),
         })
         .unwrap();
-        assert!(app.store.get_note("Knowledge/velha.md").unwrap().is_none());
-        assert!(app.store.get_note("Knowledge/nova.md").unwrap().is_some());
+        assert!(app.store.get_note("Knowledge/velha").unwrap().is_none());
+        assert!(app.store.get_note("Knowledge/nova").unwrap().is_some());
     }
 
     fn test_app_with_vault(vault: MemoryVault) -> Application {
@@ -1435,8 +1438,8 @@ mod tests {
             "errors[] deve conter a nota problemática: {:?}",
             res.errors
         );
-        assert!(app.store.get_note("Knowledge/ok.md").unwrap().is_some());
-        assert!(app.store.get_note("Knowledge/broken.md").unwrap().is_none());
+        assert!(app.store.get_note("Knowledge/ok").unwrap().is_some());
+        assert!(app.store.get_note("Knowledge/broken").unwrap().is_none());
     }
 
     #[test]
@@ -1448,7 +1451,7 @@ mod tests {
         let inner = MemorySearch::new();
         let fail = FailOnIdSearch {
             inner,
-            fail_id: "should-fail.md".into(),
+            fail_id: "should-fail".into(),
         };
         let mut app = Application::new(
             test_config(),
@@ -1482,7 +1485,7 @@ mod tests {
         });
         assert!(err.is_err(), "a falha interna deve propagar");
         assert!(
-            app.store.get_note("should-fail.md").unwrap().is_none(),
+            app.store.get_note("should-fail").unwrap().is_none(),
             "rollback: nada da tx pode persistir"
         );
         // 3) nova mutação continua funcionando (nenhuma tx presa)
@@ -1494,7 +1497,7 @@ mod tests {
             links: vec![],
         })
         .unwrap();
-        assert!(app.store.get_note("depois.md").unwrap().is_some());
+        assert!(app.store.get_note("depois").unwrap().is_some());
     }
 
     fn vault_file(app: &mut Application, path: &str) -> String {
@@ -1686,12 +1689,12 @@ mod tests {
         let q = app.build_search_query("quick", vec![], vec![], None, None, 1, 20);
         let hits = app.search(&q).unwrap();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].note_id, "a.md");
+        assert_eq!(hits[0].note_id, "a");
 
         let q = app.build_search_query("", vec!["backlog".into()], vec![], None, None, 1, 20);
         let hits = app.search(&q).unwrap();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].note_id, "b.md");
+        assert_eq!(hits[0].note_id, "b");
     }
 
     #[test]
