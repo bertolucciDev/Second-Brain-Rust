@@ -488,7 +488,25 @@ fn sanitize_fts_query(query: &str) -> String {
 /// (fallback LIKE, matched_fields, snippet). FTS paralelo ao `unicode61`
 /// (é→e, ç→c…) para a faixa Latin-1.
 fn fold(input: &str) -> String {
-    input.to_lowercase().chars().map(strip_accent).collect()
+    input.chars().map(fold_char).collect()
+}
+
+/// Dobra 1 carácter → 1 carácter (minúsculo + sem acento). Preserva a
+/// contagem de caracteres para que índices do texto dobrado continuem
+/// válidos sobre o texto original (evita cortar em boundary UTF-8).
+fn fold_char(c: char) -> char {
+    strip_accent(c.to_lowercase().next().unwrap_or(c))
+}
+
+/// Índice (em chars) da primeira ocorrência de `needle` em `hay`.
+fn find_chars(hay: &[char], needle: &[char]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    if needle.len() > hay.len() {
+        return None;
+    }
+    (0..=hay.len() - needle.len()).find(|&i| hay[i..i + needle.len()] == *needle)
 }
 
 fn strip_accent(c: char) -> char {
@@ -520,35 +538,31 @@ fn matched_fields(title: &str, content: &str, query: &str) -> Vec<String> {
 /// Snippet com janela em torno da 1ª ocorrência do termo (espelha
 /// `generateSnippet` do legado, com fold de acentos).
 fn generate_snippet(content: &str, query: &str) -> String {
-    if content.is_empty() {
+    let chars: Vec<char> = content.chars().collect();
+    if chars.is_empty() {
         return String::new();
     }
-    let folded = fold(content);
+    let folded: Vec<char> = content.chars().map(fold_char).collect();
     let term = query
         .split_whitespace()
         .next()
         .unwrap_or("")
         .trim_matches(|c| matches!(c, '*' | '"' | '\'' | '-' | '\u{b4}'));
-    let term = term.to_string();
-    let idx = if term.is_empty() {
-        0
-    } else {
-        folded.find(&fold(&term)).unwrap_or(0)
-    };
+    let term: Vec<char> = fold(term).chars().collect();
+    let idx = find_chars(&folded, &term).unwrap_or(0);
     let start = idx.saturating_sub(40);
-    let end = (start + 200).min(content.len());
+    let end = (start + 200).min(chars.len());
     let mut out = String::new();
     if start > 0 {
         out.push('…');
     }
-    let slice = &content[start..end];
-    let trimmed = slice.trim();
-    out.push_str(trimmed);
-    if end < content.len() {
+    let slice: String = chars[start..end].iter().collect();
+    out.push_str(slice.trim());
+    if end < chars.len() {
         out.push('…');
     }
     if out.is_empty() {
-        out = content[..content.len().min(160)].to_string();
+        out = chars[..chars.len().min(160)].iter().collect();
     }
     out
 }
@@ -1122,5 +1136,18 @@ mod tests {
         // "b" tem cosseno 1.0 (vetor [0.0,1.0] igual ao da query) → primeiro,
         // pelo peso semantic do hybrid.
         assert_eq!(results[1].note_id, "a");
+    }
+
+    #[test]
+    fn snippet_handles_multibyte_chars_without_panic() {
+        // Regressão: fatiar por byte em boundary UTF-8 (acentos) derrubava o
+        // servidor MCP (panic em `end byte index ... is not a char boundary`).
+        let content = format!("{} ação concluída com sucesso", "áéíóú ".repeat(40));
+        assert!(content.len() > 200);
+        let snip = generate_snippet(&content, "ação");
+        assert!(snip.contains("ação"));
+        // conteúdo curto com acento não deve entrar no ramo de fallback quebrado
+        let short = generate_snippet("Nota com acentuação", "nota");
+        assert!(short.contains("Nota"));
     }
 }

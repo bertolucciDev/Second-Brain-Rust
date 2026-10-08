@@ -599,3 +599,32 @@ Bin testa init→create→read→search→stats→sync→doctor(+reindex offline
 - Teste de fogo stdio real (`/tmp/opencode/fire_test.py`, embeddings NVIDIA reais):
   **25/25 PASS** — info/create/read/search(k/h/s)/similar/context/backlinks/stats/
   graph/adr_*/project_*/exec.
+
+# P7g — Fix panic no snippet de busca (boundaries UTF-8 / acentos)
+
+**Data:** 2026-10-08.
+
+## Bug
+
+- `generate_snippet` (`crates/second-brain-infra/src/search.rs`) fatiar por **byte**
+  (`content[start..end]`, índice derivado do texto dobrado). Como `fold` fazia
+  `to_lowercase().map(strip_accent)`, o comprimento em bytes do texto dobrado
+  **difere** do original (ex.: `é` = 2 bytes → `e` = 1). Resultado: panic
+  `end byte index ... is not a char boundary` em qualquer nota com acento cujo
+  conteúdo passasse da janela — **derrubava o servidor MCP** (reproduzido ao
+  indexar/documentar conteúdo em pt-BR no vault de demo).
+
+## Correção
+
+- `fold` agora é **1 char → 1 char** (`fold_char`: minúsculo do 1º char +
+  `strip_accent`), preservando a contagem de caracteres.
+- `generate_snippet` opera sobre `Vec<char>` (janela em chars) com `find_chars`;
+  nunca mais fatia em boundary inválido.
+
+## Verificação
+
+- Regressão: `snippet_handles_multibyte_chars_without_panic`.
+- **187 testes** (16 bin, 105 core, 66 infra); `clippy -D warnings` e `fmt` limpos.
+- Prova ao vivo (vault de demo, embeddings NVIDIA): `search "openapi autenticação
+  componentes"` → `06-autenticacao.md 0.818`, `00-visao-geral.md 0.371`,
+  `05-componentes-ref.md 0.261` — sem panic.
