@@ -447,6 +447,10 @@ impl Application {
                     continue;
                 }
                 Ok(Some(stat)) => {
+                    // Fix P7-lifetime: `note_embeddings` tem FK → notes(id), então
+                    // `put_note` é SEMPRE anterior a `search.index` (senão com
+                    // embedder presente a constraint falha no primeiro index).
+                    self.store.put_note(&note)?;
                     let changed = self
                         .store
                         .get_file_state(path)?
@@ -459,7 +463,6 @@ impl Application {
                         self.search.index_skip_embeddings(&note)?;
                     }
                     let embedded = self.search.has_embedding(note.id().value());
-                    self.store.put_note(&note)?;
                     self.store.put_file_state(
                         path,
                         &FileState {
@@ -472,8 +475,8 @@ impl Application {
                 }
                 Ok(None) => {
                     // stat indisponível (arquivo sumiu no meio): indexa sem coluna
-                    self.search.index(&note)?;
                     self.store.put_note(&note)?;
+                    self.search.index(&note)?;
                     self.index_graph_for(&note)?;
                     indexed += 1;
                 }
@@ -548,12 +551,12 @@ impl Application {
             },
             None => true,
         };
+        self.store.put_note(&note)?;
         if changed {
             self.search.index(&note)?;
         } else {
             self.search.index_skip_embeddings(&note)?;
         }
-        self.store.put_note(&note)?;
         if let Ok(Some(stat)) = self.vault.stat(path) {
             let embedded = self.search.has_embedding(note.id().value());
             self.store.put_file_state(
