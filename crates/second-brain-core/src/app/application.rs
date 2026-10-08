@@ -12,8 +12,8 @@ use super::error::{AppError, Result};
 use super::markdown_editor::{effective_entries, MarkdownEditor};
 use super::paths::path_is_inside;
 use super::ports::{
-    CommandRunner, CommandSpec, ConfigStore, EmbedPort, FileState, ParserPort, SearchPort,
-    StorePort, VaultEvent, VaultEventType, VaultPort,
+    CommandOutput, CommandRunner, CommandSpec, ConfigStore, EmbedPort, FileState, ParserPort,
+    SearchPort, StorePort, VaultEvent, VaultEventType, VaultPort,
 };
 use crate::domain::entities::{Adr, GraphEdge, GraphNode, KnowledgeGraph, Note, Project, Session};
 use crate::domain::frontmatter::{FmValue, Frontmatter};
@@ -152,6 +152,66 @@ fn fm_entries_differ(a: &[(String, FmValue)], b: &[(String, FmValue)]) -> bool {
         }
     }
     false
+}
+
+/// Tokeniza uma linha de comando em `(programa, args)` **sem shell**. Aspas
+/// simples/duplas agrupam tokens; `\` escapa o próximo caractere fora de aspas
+/// simples. Metacaracteres de shell (`|`, `&`, `;`, `>`, `<`, `$`, backtick) não
+/// têm significado — viram texto literal (rodamos o binário direto, sem shell).
+fn parse_command_line(input: &str) -> Result<(String, Vec<String>)> {
+    #[derive(PartialEq)]
+    enum Quote {
+        None,
+        Single,
+        Double,
+    }
+    let mut tokens: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut started = false;
+    let mut quote = Quote::None;
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        match (&quote, c) {
+            (Quote::None, '\'') => {
+                quote = Quote::Single;
+                started = true;
+            }
+            (Quote::None, '"') => {
+                quote = Quote::Double;
+                started = true;
+            }
+            (Quote::None, c) if c.is_whitespace() => {
+                if started {
+                    tokens.push(std::mem::take(&mut cur));
+                    started = false;
+                }
+            }
+            (Quote::None, '\\') => {
+                if let Some(next) = chars.next() {
+                    cur.push(next);
+                    started = true;
+                }
+            }
+            (Quote::Single, '\'') | (Quote::Double, '"') => quote = Quote::None,
+            (_, c) => {
+                cur.push(c);
+                started = true;
+            }
+        }
+    }
+    if quote != Quote::None {
+        return Err(AppError::InvalidInput(
+            "exec: aspas não fechadas na linha de comando".into(),
+        ));
+    }
+    if started {
+        tokens.push(cur);
+    }
+    if tokens.is_empty() {
+        return Err(AppError::InvalidInput("exec: comando vazio".into()));
+    }
+    let program = tokens.remove(0);
+    Ok((program, tokens))
 }
 
 /// Application — camada de casos de uso (P2).
@@ -1102,10 +1162,50 @@ impl Application {
         }
     }
 
+    /// Aplica a política de `exec` (FREEZE 3 / F24, ADR-Exec-017): desabilitado
+    /// por default, allowlist obrigatória, **sem `env`** do chamador.
+    fn enforce_exec_policy(&self, spec: &CommandSpec) -> Result<()> {
+        if !self.config.exec.enabled {
+            return Err(AppError::InvalidInput(
+                "exec desabilitado: defina exec.enabled=true e exec.allowed no memory.config.json"
+                    .into(),
+            ));
+        }
+        if !spec.env.is_empty() {
+            return Err(AppError::InvalidInput(
+                "exec: variáveis de ambiente do chamador não são permitidas".into(),
+            ));
+        }
+        if !self.config.exec.is_allowed(&spec.program) {
+            return Err(AppError::InvalidInput(format!(
+                "exec: comando não permitido pela allowlist: {}",
+                spec.program
+            )));
+        }
+        Ok(())
+    }
+
     /// `exec` — executa comando externo via port `CommandRunner` (C-exec).
-    /// In P2 é exposto apenas como use case; a gate/allowlist é decisão de produto.
-    pub fn run_command(&mut self, spec: &CommandSpec) -> Result<super::ports::CommandOutput> {
-        self.runner.run(spec)
+    ///
+    /// **Sem shell**: `command_line` é tokenizada (aspas simples/duplas, `\`),
+    /// o programa é validado contra a allowlist e a execução é direta; `|`,
+    /// `&&`, `;`, `>` e `$(…)` viram argumentos literais (sem injeção). `cwd` =
+    /// vault, `env` vazio, timeout default 30s limitado pelo teto da config.
+    pub fn exec(&mut self, command_line: &str, timeout_ms: Option<u64>) -> Result<CommandOutput> {
+        let (program, args) = parse_command_line(command_line)?;
+        let policy = self.config.exec.clone();
+        let timeout = timeout_ms
+            .unwrap_or(policy.timeout_ms)
+            .min(policy.max_timeout_ms);
+        let spec = CommandSpec {
+            program,
+            args,
+            env: Vec::new(),
+            cwd: Some(self.vault.path().to_string()),
+            timeout_ms: Some(timeout),
+        };
+        self.enforce_exec_policy(&spec)?;
+        self.runner.run(&spec)
     }
 
     /// Caminho bruto do vault (para `open`/URI e diagnóstico).
@@ -1131,7 +1231,8 @@ mod tests {
             index_on_startup: true,
             auto_reflect: true,
             max_context_documents: 12,
-            search_strategy: SearchStrategy::Keyword,
+            search_strategy: SearchStrategy::Hybrid,
+            exec: Default::default(),
             extra: Default::default(),
         }
     }
@@ -1967,6 +2068,64 @@ mod tests {
         .unwrap();
         app.set_project("Knowledge/z", &pid).unwrap();
         assert_eq!(app.project_show(&pid).unwrap().notes, 3);
+    }
+
+    #[test]
+    fn parse_command_line_splits_and_honors_quotes() {
+        let (p, a) = parse_command_line("git status").unwrap();
+        assert_eq!(p, "git");
+        assert_eq!(a, vec!["status"]);
+
+        let (p, a) = parse_command_line("git commit -m \"hello world\"").unwrap();
+        assert_eq!(p, "git");
+        assert_eq!(a, vec!["commit", "-m", "hello world"]);
+
+        let (p, a) = parse_command_line("echo 'a  b'").unwrap();
+        assert_eq!(p, "echo");
+        assert_eq!(a, vec!["a  b"]);
+
+        let (p, a) = parse_command_line("a\\ b").unwrap();
+        assert_eq!(p, "a b");
+        assert!(a.is_empty());
+    }
+
+    #[test]
+    fn parse_command_line_does_not_interpret_shell_metachars() {
+        // Sem shell: `;` não separa comandos — vira parte do token do programa.
+        let (p, a) = parse_command_line("git; rm -rf /").unwrap();
+        assert_eq!(p, "git;");
+        assert_eq!(a, vec!["rm", "-rf", "/"]);
+    }
+
+    #[test]
+    fn parse_command_line_rejects_empty_and_unterminated() {
+        assert!(parse_command_line("   ").is_err());
+        assert!(parse_command_line("git \"unterminated").is_err());
+    }
+
+    #[test]
+    fn exec_disabled_by_default_in_core() {
+        let mut app = test_app();
+        let err = app.exec("git status", None).unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn exec_runs_when_allowlisted() {
+        use crate::app::config::ExecPolicy;
+        let mut app = test_app();
+        app.config.exec = ExecPolicy {
+            enabled: true,
+            allowed: vec!["git".into()],
+            ..Default::default()
+        };
+        // StubRunner responde Ok — valida que a política deixa passar.
+        assert!(app.exec("git status", Some(120_000)).is_ok());
+
+        // Fora da allowlist → erro.
+        assert!(app.exec("curl http://x", None).is_err());
+        // Metacaractere não burla a allowlist (programa é `git;`).
+        assert!(app.exec("git; rm -rf /", None).is_err());
     }
 
     #[test]

@@ -15,11 +15,16 @@ pub struct ProcessRunner;
 
 impl CommandRunner for ProcessRunner {
     fn run(&mut self, spec: &CommandSpec) -> Result<CommandOutput> {
-        let mut child = Command::new(&spec.program)
+        let mut command = Command::new(&spec.program);
+        command
             .args(&spec.args)
             .envs(spec.env.iter().map(|e| (e.key.as_str(), e.value.as_str())))
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(dir) = &spec.cwd {
+            command.current_dir(dir);
+        }
+        let mut child = command
             .spawn()
             .map_err(|e| AppError::Command(format!("falha ao iniciar {}: {e}", spec.program)))?;
 
@@ -73,6 +78,7 @@ mod tests {
             program: program.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
             env: Vec::new(),
+            cwd: None,
             timeout_ms: Some(5000),
         }
     }
@@ -90,6 +96,7 @@ mod tests {
                 program: program.into(),
                 args: args.iter().map(|s| s.to_string()).collect(),
                 env: Vec::new(),
+                cwd: None,
                 timeout_ms: Some(5000),
             })
             .unwrap();

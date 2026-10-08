@@ -527,3 +527,40 @@ Bin testa init→create→read→search→stats→sync→doctor(+reindex offline
 - Core: `project_list_show_and_link` passa (StubParser não pegava o bug por `faithful=false`).
 - MCP/infra real: `project_create_list_show_and_link` passa (era o teste que expunha o falso conflito).
 - Prova ao vivo (`/tmp/opencode/probe`): `project_link` vinculou `Knowledge/b.md` sem falso conflito; arquivo ganhou `project`/`updated` corretamente.
+
+# P7e — MCP `second_brain_exec` (configurável + allowlist; contrato 16/16)
+
+**Data:** 2026-10-08.
+
+## Mudanças
+
+- **DIFERENÇA INTENCIONAL (C-exec / F24, FREEZE 3)**: o legado executava shell
+  arbitrário (`cmd.exe /c`, `server.ts:786`). Aqui: **desabilitado por default**,
+  **allowlist obrigatória**, **sem shell** e **sem `env` do chamador**.
+- `Config.exec: ExecPolicy` (`enabled` default `false`, `allowed: []`,
+  `timeoutMs` default 30s, `maxTimeoutMs` default 300s), camelCase.
+- `CommandSpec.cwd` (novo) — `ProcessRunner` aplica `current_dir`; `cwd` = vault.
+- `Application::exec(command_line, timeout_ms)`: tokeniza a linha **sem shell**
+  (`parse_command_line`: aspas simples/duplas + `\`; `|`,`&&`,`;`,`>`,`$`,backtick
+  são literais), valida allowlist por **basename** (`git` ≡ `/usr/bin/git` ≡
+  `git.exe`), fixa `cwd`/timeout e roda via port `CommandRunner`.
+- MCP `second_brain_exec`: rejeita `env` do chamador; saída em texto (formato
+  legado `stdout:/stderr:/exit code:`) — o wrapper MCP passa payload string cru
+  (objetos continuam JSON). **Contrato 16/16 tools completo.**
+- `Application::run_command` (passthrough sem gate) removido — substituído por `exec`.
+
+## Verificação (testes + prova ao vivo)
+
+- **182 testes** (13 bin, 104 core, 65 infra); `clippy -D warnings` e `fmt` limpos.
+- Core: `parse_command_line_*` (quotes/escape/metachar literal/erros), `exec_disabled_by_default_in_core`, `exec_runs_when_allowlisted` (StubRunner); config: `exec_disabled_by_default_and_parses_policy` (basename/`.exe`).
+- Bin (infra real): `exec_disabled_by_default`, `exec_rejects_non_allowlisted_program`, `exec_rejects_caller_env`, `exec_runs_allowlisted_command_in_vault`.
+- Prova ao vivo JSON-RPC (`/tmp/opencode/exec-probe`, `exec.allowed=["git"]`):
+  `git init -q` → `exit code: 0` **e `.git` criado dentro do vault** (cwd=vault);
+  `git status` → bloco `stdout:` correto; `curl …` → erro de allowlist;
+  `env` do chamador → erro; config sem `exec` → "exec desabilitado".
+
+## Pendência remanescente (produto)
+
+- A **lista** default de comandos/candidatos (`git`, `docker`, `aws`, `rage`,
+  `vercel`) e quais rodam no Windows segue decisão de produto. O mecanismo está
+  pronto: basta preencher `exec.allowed` na config.

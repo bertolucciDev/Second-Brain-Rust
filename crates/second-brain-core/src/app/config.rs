@@ -37,6 +37,65 @@ fn default_max_context_documents() -> u32 {
     12
 }
 
+fn default_exec_timeout_ms() -> u64 {
+    30_000
+}
+
+fn default_exec_max_timeout_ms() -> u64 {
+    300_000
+}
+
+/// Política do `second_brain_exec` (FREEZE 3 / F24, ADR-Exec-017).
+///
+/// **Desabilitado por default**: sem `enabled=true` e uma allowlist não vazia,
+/// `exec` responde erro explícito. Quando habilitado, apenas os executáveis em
+/// `allowed` rodam; o `env` do chamador é ignorado/rejeitado, `cwd` = vault e o
+/// timeout é limitado por `maxTimeoutMs`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecPolicy {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Executáveis permitidos (nome simples ou caminho). Comparação pelo
+    /// basename — `git` e `/usr/bin/git` casam entre si.
+    #[serde(default)]
+    pub allowed: Vec<String>,
+    #[serde(default = "default_exec_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_exec_max_timeout_ms")]
+    pub max_timeout_ms: u64,
+}
+
+impl Default for ExecPolicy {
+    fn default() -> Self {
+        ExecPolicy {
+            enabled: false,
+            allowed: Vec::new(),
+            timeout_ms: default_exec_timeout_ms(),
+            max_timeout_ms: default_exec_max_timeout_ms(),
+        }
+    }
+}
+
+impl ExecPolicy {
+    /// `program` está na allowlist? Compara pelo basename (sem separador de
+    /// caminho), aceitando tanto nomes simples (`git`) quanto absolutos.
+    pub fn is_allowed(&self, program: &str) -> bool {
+        let want = basename(program);
+        !want.is_empty() && self.allowed.iter().any(|a| basename(a) == want)
+    }
+}
+
+/// Último componente do caminho (`a/b/git` → `git`; `git` → `git`).
+fn basename(program: &str) -> &str {
+    program
+        .trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program)
+        .trim_end_matches(".exe")
+}
+
 /// Configuração resolvida do Second Brain (`memory.config.json`).
 ///
 /// Chaves `camelCase` idênticas ao legado (F23). Campos desconhecidos são
@@ -60,6 +119,8 @@ pub struct Config {
     pub max_context_documents: u32,
     #[serde(default)]
     pub search_strategy: SearchStrategy,
+    #[serde(default)]
+    pub exec: ExecPolicy,
     /// Campos não reconhecidos (get/set arbitrário do legado) — preservados.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -75,6 +136,7 @@ impl Default for Config {
             auto_reflect: true,
             max_context_documents: 12,
             search_strategy: SearchStrategy::Hybrid,
+            exec: ExecPolicy::default(),
             extra: BTreeMap::new(),
         }
     }
@@ -108,6 +170,7 @@ impl Config {
             auto_reflect: self.auto_reflect,
             max_context_documents: self.max_context_documents,
             search_strategy: self.search_strategy,
+            exec: self.exec.clone(),
             extra: self.extra.clone(),
         }
     }
@@ -209,6 +272,31 @@ mod tests {
         // não-destruição: re-serialização mantém o campo extra.
         let out = serde_json::to_value(&c).unwrap();
         assert_eq!(out["customThing"]["a"], 1);
+    }
+
+    #[test]
+    fn exec_disabled_by_default_and_parses_policy() {
+        // Ausente → desabilitada, sem comandos.
+        let raw = r#"{"vaultPath":"/v","dbPath":"/d"}"#;
+        let c = Config::from_json(raw).unwrap();
+        assert!(!c.exec.enabled);
+        assert!(c.exec.allowed.is_empty());
+        assert_eq!(c.exec.timeout_ms, 30_000);
+        assert_eq!(c.exec.max_timeout_ms, 300_000);
+
+        let raw = r#"{
+            "vaultPath":"/v","dbPath":"/d",
+            "exec": {"enabled": true, "allowed": ["git", "/usr/bin/rage"], "timeoutMs": 5000}
+        }"#;
+        let c = Config::from_json(raw).unwrap();
+        assert!(c.exec.enabled);
+        assert_eq!(c.exec.timeout_ms, 5000);
+        assert_eq!(c.exec.max_timeout_ms, 300_000);
+        assert!(c.exec.is_allowed("git"));
+        assert!(c.exec.is_allowed("/usr/bin/git")); // basename
+        assert!(c.exec.is_allowed("rage")); // entry absoluta
+        assert!(c.exec.is_allowed("C:\\bin\\git.exe")); // .exe / separador win
+        assert!(!c.exec.is_allowed("curl"));
     }
 
     #[test]

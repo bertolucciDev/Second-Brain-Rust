@@ -2,10 +2,9 @@
 //! do Application Real (mesma do CLI). Substitui o MCP legado TS — contrato de
 //! tools/list preservado a partir da fixture capturada na P0.
 //!
-//! Implementado nesta fase: search/read/create/stats/graph/info/adr_create/
-//! similar/context/backlinks/adr_list/project_create/project_list/project_show/
-//! project_link; falta apenas `second_brain_exec` (decisão explícita do usuário —
-//! executa comando arbitrário) para fechar o contrato de 16 tools.
+//! Implementado: as **16 tools** do contrato congelado (P7 completo).
+//! `second_brain_exec` segue a política FREEZE 3 (F24): desabilitada por default
+//! (`exec.enabled=false`), allowlist obrigatória, sem shell e sem `env` do chamador.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -93,14 +92,22 @@ pub(crate) fn handle_line(line: &str, app: &mut Application) -> Result<Option<Va
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             match call_tool(name, &args, app) {
-                Ok(payload) => Ok(Some(json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "content": [{"type": "text", "text": payload.to_string()}],
-                        "isError": false
-                    }
-                }))),
+                Ok(payload) => {
+                    // Payload string = texto cru (formato do `exec` legado);
+                    // objetos viram JSON (demais tools).
+                    let text = match &payload {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    Ok(Some(json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "content": [{"type": "text", "text": text}],
+                            "isError": false
+                        }
+                    })))
+                }
                 Err(e) => Ok(Some(json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -287,6 +294,29 @@ fn call_tool(name: &str, args: &Value, app: &mut Application) -> Result<Value> {
                 "note": note.path(),
                 "project": s(args, "projectId"),
             }))
+        }
+        "second_brain_exec" => {
+            // Política FREEZE 3 (F24): sem `env` injetável pelo chamador.
+            if args.get("env").map(|v| !v.is_null()).unwrap_or(false) {
+                return Err(AppError::InvalidInput(
+                    "exec: env do chamador não é permitido (política de segurança)".into(),
+                ));
+            }
+            let out = app.exec(
+                &s(args, "command"),
+                args.get("timeout").and_then(Value::as_u64),
+            )?;
+            let stdout = out.stdout.trim();
+            let stderr = out.stderr.trim();
+            let mut parts = Vec::new();
+            if !stdout.is_empty() {
+                parts.push(format!("stdout:\n{stdout}"));
+            }
+            if !stderr.is_empty() {
+                parts.push(format!("stderr:\n{stderr}"));
+            }
+            parts.push(format!("exit code: {}", out.exit_code));
+            Ok(json!(parts.join("\n\n")))
         }
         other => Err(AppError::InvalidInput(format!(
             "tool '{other}' ainda não implementada na falha de migração Rust (P7) — \
@@ -492,5 +522,65 @@ mod tests {
         assert_eq!(link["project"], pid);
         let show2 = call("second_brain_project_show", &json!({"id": pid}), &mut app);
         assert_eq!(show2["notes"].as_u64().unwrap(), 3);
+    }
+
+    #[test]
+    fn exec_disabled_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+        let err = call_tool(
+            "second_brain_exec",
+            &json!({"command": "git --version"}),
+            &mut app,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("exec desabilitado"), "got: {err}");
+    }
+
+    #[test]
+    fn exec_rejects_program_outside_allowlist() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+        app.config.exec.enabled = true;
+        app.config.exec.allowed = vec!["git".into()];
+        let err = call_tool(
+            "second_brain_exec",
+            &json!({"command": "__definitely_not_allowed__ arg"}),
+            &mut app,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("allowlist"), "got: {err}");
+    }
+
+    #[test]
+    fn exec_rejects_caller_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+        app.config.exec.enabled = true;
+        app.config.exec.allowed = vec!["git".into()];
+        let err = call_tool(
+            "second_brain_exec",
+            &json!({"command": "git --version", "env": {"SECRET": "x"}}),
+            &mut app,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("env"), "got: {err}");
+    }
+
+    #[test]
+    fn exec_runs_allowlisted_command_in_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+        app.config.exec.enabled = true;
+        app.config.exec.allowed = vec!["git".into()];
+        let payload = call(
+            "second_brain_exec",
+            &json!({"command": "git --version"}),
+            &mut app,
+        );
+        // Payload textual (formato legado), não JSON.
+        let text = payload.as_str().expect("exec retorna texto cru");
+        assert!(text.contains("git version"), "got: {text}");
+        assert!(text.contains("exit code: 0"), "got: {text}");
     }
 }
