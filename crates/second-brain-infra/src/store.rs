@@ -651,6 +651,41 @@ impl StorePort for SqliteStore {
             .map_err(store_err)?;
         Ok(rows)
     }
+    fn find_backlinks(&mut self, target_id: &str) -> Result<Vec<Note>> {
+        let conn = self.ensure_open()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT n.id, n.path, n.title, n.content, n.frontmatter, n.tags, n.links, \
+                        n.project_id, n.metadata
+                 FROM notes n JOIN link_edges e ON e.source_id = n.id
+                 WHERE e.target_id = ?1 ORDER BY n.path",
+            )
+            .map_err(store_err)?;
+        let rows = stmt
+            .query_map([target_id], row_to_note)
+            .map_err(store_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(store_err)?;
+        Ok(rows)
+    }
+
+    fn find_outgoing_links(&mut self, source_id: &str) -> Result<Vec<Note>> {
+        let conn = self.ensure_open()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT n.id, n.path, n.title, n.content, n.frontmatter, n.tags, n.links, \
+                        n.project_id, n.metadata
+                 FROM notes n JOIN link_edges e ON e.target_id = n.id
+                 WHERE e.source_id = ?1 ORDER BY n.path",
+            )
+            .map_err(store_err)?;
+        let rows = stmt
+            .query_map([source_id], row_to_note)
+            .map_err(store_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(store_err)?;
+        Ok(rows)
+    }
 }
 
 /// `resolveTargetId` do legado: primeiro id cujo id OU path casa LIKE `%target%`.

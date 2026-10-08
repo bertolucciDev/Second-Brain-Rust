@@ -179,3 +179,45 @@ pub struct SearchResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy_used: Option<String>,
 }
+
+/// Referência leve a uma nota (path + título), usada em backlinks/outgoing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteRef {
+    pub path: String,
+    pub title: String,
+}
+
+/// `backlinks` — grafo local da nota: quem cita (backlinks) e quem é citado
+/// (outgoing). Resolve a nota por path ou id com/sem `.md`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BacklinksOutput {
+    pub note: NoteRef,
+    pub backlinks: Vec<NoteRef>,
+    pub outgoing: Vec<NoteRef>,
+    pub total: usize,
+}
+
+/// Documento do `context` (formato pronto para consumo por LLM).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextDoc {
+    pub source: String,
+    pub title: String,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub links: Vec<String>,
+    pub backlinks: Vec<NoteRef>,
+    pub relevance: f64,
+    pub matched_fields: Vec<String>,
+}
+
+/// Item do `adr_list` (título + path + status).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdrSummary {
+    pub title: String,
+    pub path: String,
+    pub status: String,
+}

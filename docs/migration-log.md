@@ -489,3 +489,24 @@ Bin testa init→create→read→search→stats→sync→doctor(+reindex offline
 - Re-sync imediato: `indexadas 0/3` — embed-guard **evita** re-chamadas com file_state.embedded=true.
 - MCP (opencode) lê a mesma `.env` do diretório de trabalho do servidor (`mcp-demo/`)
 
+
+# P7c — MCP: similar, context, backlinks, adr_list
+
+**Data:** 2026-10-08.
+
+## Mudanças
+
+- `StorePort::find_backlinks(target_id)` / `find_outgoing_links(source_id)` (SQL
+  em `link_edges` + stub em memória) — espelham `MemoryNoteRepository` do legado.
+- `Application::similar(query, limit)`, `Application::context(query, max_docs,
+  include_content, strategy)`, `Application::backlinks(id)`, `Application::adr_list()`
+  + contratos `NoteRef/BacklinksOutput/ContextDoc/AdrSummary`.
+- MCP: 4 tools novas (total 11/16 implementadas). Sem cancelamento de contrato.
+
+## Verificação (testes)
+
+- 8 testes bin (4 novos MCP via infra real em tempdir), 97 core (+1), 64 infra.
+- Prova ao vivo com embeddings reais (vault `/tmp/opencode/nv-test`):
+  `similar "receita de bolo"` → Bolo 0.544 / Embeddings 0.143 / Home 0.045
+  (ranking por cosseno); `context "semântica"` → SOURCE/TITLE/RELEVANCE + snippet;
+  backlinks/adr_list respondem estruturas corretas.

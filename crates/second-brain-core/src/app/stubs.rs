@@ -153,6 +153,35 @@ impl StorePort for MemoryStore {
         Ok(self.edges.clone())
     }
 
+    fn find_backlinks(&mut self, target_id: &str) -> Result<Vec<Note>> {
+        let target = target_id.trim_end_matches(".md");
+        Ok(self
+            .notes
+            .values()
+            .filter(|note| {
+                note.wiki_links()
+                    .iter()
+                    .any(|l| l.target().trim_end_matches(".md") == target)
+            })
+            .cloned()
+            .collect())
+    }
+
+    fn find_outgoing_links(&mut self, source_id: &str) -> Result<Vec<Note>> {
+        let source = match self.notes.get(source_id) {
+            Some(n) => n,
+            None => return Ok(Vec::new()),
+        };
+        Ok(source
+            .wiki_links()
+            .iter()
+            .filter_map(|l| {
+                let id = l.target().trim_end_matches(".md");
+                self.notes.get(id).cloned()
+            })
+            .collect())
+    }
+
     fn put_file_state(&mut self, path: &str, state: &FileState) -> Result<()> {
         self.file_states.insert(path.to_string(), *state);
         Ok(())

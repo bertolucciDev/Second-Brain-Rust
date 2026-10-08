@@ -4,8 +4,8 @@ use serde_json::Value;
 
 use super::config::{Config, SearchStrategy};
 use super::contract::{
-    DoctorFinding, DoctorLevel, GraphOutput, InitResult, ReindexResult, SearchQuery, SearchResult,
-    SessionSummary, SyncResult, VaultStats,
+    AdrSummary, BacklinksOutput, ContextDoc, DoctorFinding, DoctorLevel, GraphOutput, InitResult,
+    NoteRef, ReindexResult, SearchQuery, SearchResult, SessionSummary, SyncResult, VaultStats,
 };
 use super::error::{AppError, Result};
 use super::markdown_editor::MarkdownEditor;
@@ -408,6 +408,124 @@ impl Application {
     /// `search` — delega ao port de busca (regras FTS/hybrid são da infra P5).
     pub fn search(&mut self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
         self.search.search(query)
+    }
+
+    /// `similar` — busca semântica (somente por embedding), espelha o MCP legado.
+    pub fn similar(&mut self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        let q = SearchQuery {
+            query: query.to_string(),
+            strategy: Some(SearchStrategy::Semantic),
+            page_size: limit.max(1) as u32,
+            ..Default::default()
+        };
+        self.search.search(&q)
+    }
+
+    /// `backlinks` — grafo local da nota (quem cita / quem é citado).
+    pub fn backlinks(&mut self, id: &str) -> Result<BacklinksOutput> {
+        let note = self.read_note(id)?;
+        let note_id = note.id().value().to_string();
+        let backlinks = self.store.find_backlinks(&note_id)?;
+        let outgoing = self.store.find_outgoing_links(&note_id)?;
+        let out = BacklinksOutput {
+            note: NoteRef {
+                path: note.path().to_string(),
+                title: note.title().to_string(),
+            },
+            backlinks: backlinks
+                .iter()
+                .map(|n| NoteRef {
+                    path: n.path().to_string(),
+                    title: n.title().to_string(),
+                })
+                .collect(),
+            outgoing: outgoing
+                .iter()
+                .map(|n| NoteRef {
+                    path: n.path().to_string(),
+                    title: n.title().to_string(),
+                })
+                .collect(),
+            total: backlinks.len() + outgoing.len(),
+        };
+        Ok(out)
+    }
+
+    /// `context` — busca + monta documentos prontos para consumo por LLM (RAG).
+    /// `max_docs` limita o número de documentos; `include_content=false` troca o
+    /// conteúdo pelo snippet do resultado.
+    pub fn context(
+        &mut self,
+        query: &str,
+        max_docs: usize,
+        include_content: bool,
+        strategy: Option<SearchStrategy>,
+    ) -> Result<Vec<ContextDoc>> {
+        let q = SearchQuery {
+            query: query.to_string(),
+            strategy,
+            page_size: max_docs.max(1) as u32,
+            ..Default::default()
+        };
+        let results = self.search.search(&q)?;
+        let mut docs = Vec::with_capacity(results.len());
+        for r in results {
+            let note = match self.read_note(&r.note_id) {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            let note_id = note.id().value().to_string();
+            let backlinks = self.store.find_backlinks(&note_id)?;
+            let _ = self.store.find_outgoing_links(&note_id)?;
+            docs.push(ContextDoc {
+                source: note.path().to_string(),
+                title: note.title().to_string(),
+                content: if include_content {
+                    note.content().to_string()
+                } else {
+                    r.snippet.clone()
+                },
+                tags: note.tags().iter().map(|t| t.value().to_string()).collect(),
+                links: note
+                    .wiki_links()
+                    .iter()
+                    .map(|l| l.target().to_string())
+                    .collect(),
+                backlinks: backlinks
+                    .iter()
+                    .map(|n| NoteRef {
+                        path: n.path().to_string(),
+                        title: n.title().to_string(),
+                    })
+                    .collect(),
+                relevance: r.score,
+                matched_fields: r.matched_fields,
+            });
+        }
+        Ok(docs)
+    }
+
+    /// `adr_list` — lista ADRs (notas com tag `adr`), com status extraído de
+    /// `status-*` (espelha o MCP legado).
+    pub fn adr_list(&mut self) -> Result<Vec<AdrSummary>> {
+        let mut items = Vec::new();
+        for note in self.store.all_notes()? {
+            let tags: Vec<String> = note.tags().iter().map(|t| t.value().to_string()).collect();
+            if !tags.iter().any(|t| t == "adr") {
+                continue;
+            }
+            let status = tags
+                .iter()
+                .find(|t| t.starts_with("status-"))
+                .map(|t| t.trim_start_matches("status-").to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            items.push(AdrSummary {
+                title: note.title().to_string(),
+                path: note.path().to_string(),
+                status,
+            });
+        }
+        Ok(items)
     }
 
     /// `sync` — rebuild do índice a partir do vault (espelha `SyncService.syncAll`).
@@ -1698,6 +1816,59 @@ mod tests {
         let hits = app.search(&q).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].note_id, "b");
+    }
+
+    #[test]
+    fn backlinks_outgoing_and_adr_list() {
+        let mut app = test_app();
+        app.create_note(CreateNoteRequest {
+            path: "a.md".into(),
+            title: Some("Alpha".into()),
+            content: "alpha body".into(),
+            tags: vec!["design".into()],
+            links: vec!["b".into(), "c".into()],
+        })
+        .unwrap();
+        app.create_note(CreateNoteRequest {
+            path: "b.md".into(),
+            title: Some("Beta".into()),
+            content: "beta body".into(),
+            tags: vec!["adr".into(), "status-proposed".into()],
+            links: vec![],
+        })
+        .unwrap();
+        app.create_note(CreateNoteRequest {
+            path: "c.md".into(),
+            title: Some("Gamma".into()),
+            content: "gamma body".into(),
+            tags: vec!["adr".into(), "status-accepted".into()],
+            links: vec![],
+        })
+        .unwrap();
+
+        let out = app.backlinks("b").unwrap();
+        assert_eq!(out.note.title, "Beta");
+        assert_eq!(out.backlinks.len(), 1, "a cita b");
+        assert_eq!(out.backlinks[0].title, "Alpha");
+        assert!(
+            out.outgoing.iter().all(|r| r.title != "Alpha"),
+            "outgoing de b não inclui a (a aponta para b)"
+        );
+
+        let out_a = app.backlinks("a").unwrap();
+        assert_eq!(out_a.outgoing.len(), 2);
+        assert!(out_a.outgoing.iter().any(|r| r.title == "Beta"));
+        assert!(out_a.outgoing.iter().any(|r| r.title == "Gamma"));
+        assert_eq!(out_a.total, 2);
+
+        let adrs = app.adr_list().unwrap();
+        assert_eq!(adrs.len(), 2);
+        assert!(adrs
+            .iter()
+            .any(|a| a.status == "proposed" && a.title == "Beta"));
+        assert!(adrs
+            .iter()
+            .any(|a| a.status == "accepted" && a.title == "Gamma"));
     }
 
     #[test]

@@ -120,6 +120,10 @@ pub trait StorePort {
     fn delete_node(&mut self, path: &str) -> Result<()>;
     fn all_nodes(&mut self) -> Result<Vec<GraphNode>>;
     fn all_edges(&mut self) -> Result<Vec<GraphEdge>>;
+    /// Notas cujo grafo tem edge apontando PARA `target_id` (quem cita a nota).
+    fn find_backlinks(&mut self, target_id: &str) -> Result<Vec<Note>>;
+    /// Notas citadas POR `source_id` (para quem a nota aponta).
+    fn find_outgoing_links(&mut self, source_id: &str) -> Result<Vec<Note>>;
     /// Fingerprint de indexação (P6 embed-guard): registrado a cada `sync` para
     /// re-embedar apenas arquivos mudados desde a última execução.
     fn put_file_state(&mut self, path: &str, state: &FileState) -> Result<()>;

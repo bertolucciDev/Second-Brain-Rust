@@ -2,9 +2,9 @@
 //! do Application Real (mesma do CLI). Substitui o MCP legado TS — contrato de
 //! tools/list preservado a partir da fixture capturada na P0.
 //!
-//! Implementado nesta fase: search/read/create/stats/graph/info/adr_create;
-//! o restante do contrato (16 tools) responde "not implemented" com erro
-//! JSON-RPC claro até as próximas fases.
+//! Implementado nesta fase: search/read/create/stats/graph/info/adr_create/
+//! similar/context/backlinks/adr_list; o restante do contrato (16 tools)
+//! responde "not implemented" com erro JSON-RPC claro até as próximas fases.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -195,6 +195,71 @@ fn call_tool(name: &str, args: &Value, app: &mut Application) -> Result<Value> {
                 "status": adr.status().as_str(),
             }))
         }
+        "second_brain_similar" => {
+            let limit = opt_usize(args, "limit").unwrap_or(10);
+            let results = app.similar(&s(args, "query"), limit)?;
+            let items = results
+                .iter()
+                .map(|r| {
+                    let title = app
+                        .read_note(&r.note_id)
+                        .map(|n| n.title().to_string())
+                        .unwrap_or_default();
+                    json!({
+                        "id": r.note_id,
+                        "path": r.note_id,
+                        "title": title,
+                        "score": r.score,
+                        "snippet": r.snippet,
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(json!({ "total": items.len(), "items": items }))
+        }
+        "second_brain_context" => {
+            let query = s(args, "query");
+            let max_docs = opt_usize(args, "maxDocuments").unwrap_or(5);
+            let include_content = args
+                .get("includeContent")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let strategy = match opt_s(args, "strategy").as_deref() {
+                Some("keyword") => Some(SearchStrategy::Keyword),
+                Some("semantic") => Some(SearchStrategy::Semantic),
+                Some("hybrid") => Some(SearchStrategy::Hybrid),
+                _ => None,
+            };
+            let docs = app.context(&query, max_docs, include_content, strategy)?;
+            let sources = docs.iter().map(|d| d.source.clone()).collect::<Vec<_>>();
+            let context_text = docs
+                .iter()
+                .map(|d| {
+                    format!(
+                        "SOURCE: {}\nTITLE: {}\nTAGS: {}\nRELEVANCE: {}\n\n{}\n\n---",
+                        d.source,
+                        d.title,
+                        d.tags.join(", "),
+                        d.relevance,
+                        d.content,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            Ok(json!({
+                "context": context_text,
+                "count": docs.len(),
+                "sources": sources,
+            }))
+        }
+        "second_brain_backlinks" => {
+            let target = s_opt_most(args, &["path", "id"]);
+            let out = app.backlinks(&target)?;
+            Ok(serde_json::to_value(&out).map_err(ser_err)?)
+        }
+        "second_brain_adr_list" => {
+            let items = app.adr_list()?;
+            Ok(json!({ "total": items.len(), "items": items }))
+        }
         other => Err(AppError::InvalidInput(format!(
             "tool '{other}' ainda não implementada na falha de migração Rust (P7) — \
              disponível no legado TS enquanto durar a transição"
@@ -231,6 +296,13 @@ fn opt_s(args: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn opt_usize(args: &Value, key: &str) -> Option<usize> {
+    args.get(key)
+        .and_then(Value::as_u64)
+        .filter(|v| *v > 0)
+        .map(|v| v as usize)
+}
+
 fn s_opt_most(args: &Value, keys: &[&str]) -> String {
     keys.iter().find_map(|k| opt_s(args, k)).unwrap_or_default()
 }
@@ -245,4 +317,119 @@ fn vec_str(args: &Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    use second_brain_core::app::CreateNoteRequest;
+
+    /// Setup com infra real (SQLite real + parser real) em tempdir — nunca toca
+    /// o vault do usuário. Sem chave NVIDIA → embedder Null (keyword fallback).
+    fn setup_app(dir: &tempfile::TempDir) -> Application {
+        let cfg_raw = json!({
+            "vaultPath": dir.path().join("vault").to_string_lossy(),
+            "dbPath": dir.path().join(".memoryos").join("index.db").to_string_lossy(),
+            "indexOnStartup": false,
+        });
+        fs::write(dir.path().join("memory.config.json"), cfg_raw.to_string()).unwrap();
+        let cfg = super::super::load_config(dir.path()).unwrap();
+        let mut app = super::super::compose(cfg, dir.path()).unwrap();
+        // seed físico (o sync de startup está desligado)
+        let vault = dir.path().join("vault");
+        fs::create_dir_all(vault.join("Knowledge")).unwrap();
+        // alvos ANTES de quem cita: resolve_target_id só resolve se a nota existe.
+        app.create_note(CreateNoteRequest {
+            path: "Knowledge/b.md".into(),
+            title: Some("Beta".into()),
+            content: "no match here, just filler words".into(),
+            tags: vec!["backlog".into()],
+            links: vec![],
+        })
+        .unwrap();
+        app.create_note(CreateNoteRequest {
+            path: "Knowledge/c.md".into(),
+            title: Some("Gamma".into()),
+            content: "launch gamma protocol someday".into(),
+            tags: vec!["adr".into(), "status-accepted".into()],
+            links: vec![],
+        })
+        .unwrap();
+        app.create_note(CreateNoteRequest {
+            path: "Knowledge/a.md".into(),
+            title: Some("Alpha engine".into()),
+            content: "the quick brown fox leaps over the dog".into(),
+            tags: vec!["design".into(), "adr".into(), "status-proposed".into()],
+            links: vec!["b".into(), "c".into()],
+        })
+        .unwrap();
+        app
+    }
+
+    fn call(name: &str, args: &Value, app: &mut Application) -> Value {
+        call_tool(name, args, app).unwrap()
+    }
+
+    #[test]
+    fn similar_returns_ranked_items() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+        let out = call(
+            "second_brain_similar",
+            &json!({"query": "quick brown", "limit": 5}),
+            &mut app,
+        );
+        let items = out["items"].as_array().unwrap();
+        assert!(!items.is_empty(), "semântica/fallback deve retornar hits");
+        assert!(items[0]["score"].is_number());
+    }
+
+    #[test]
+    fn context_formats_docs_and_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+        let out = call(
+            "second_brain_context",
+            &json!({"query": "brown", "maxDocuments": 3, "includeContent": true}),
+            &mut app,
+        );
+        assert!(out["count"].as_u64().unwrap() >= 1);
+        let text = out["context"].as_str().unwrap();
+        assert!(text.contains("SOURCE: Knowledge/a.md"));
+        assert!(text.contains("Alpha engine"));
+    }
+
+    #[test]
+    fn backlinks_distinguishes_in_and_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+        let out = call(
+            "second_brain_backlinks",
+            &json!({"path": "Knowledge/b"}),
+            &mut app,
+        );
+        assert_eq!(out["note"]["title"], "Beta");
+        let backlinks = out["backlinks"].as_array().unwrap();
+        assert_eq!(backlinks.len(), 1);
+        assert_eq!(backlinks[0]["path"], "Knowledge/a.md");
+        assert!(out["outgoing"].as_array().unwrap().is_empty());
+        assert_eq!(out["total"].as_u64().unwrap(), 1);
+    }
+
+    #[test]
+    fn adr_list_extracts_status_from_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+        let out = call("second_brain_adr_list", &json!({}), &mut app);
+        assert_eq!(out["total"].as_u64().unwrap(), 2);
+        let items = out["items"].as_array().unwrap();
+        assert!(items
+            .iter()
+            .any(|i| i["status"] == "proposed" && i["title"] == "Alpha engine"));
+        assert!(items
+            .iter()
+            .any(|i| i["status"] == "accepted" && i["title"] == "Gamma"));
+    }
 }
