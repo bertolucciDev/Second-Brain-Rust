@@ -474,3 +474,18 @@ hybrid **sem** embedder → keyword + `degraded`; degradação semantic → idem
 | `cargo fmt --all -- --check` | limpo |
 
 Bin testa init→create→read→search→stats→sync→doctor(+reindex offline erra honestamente) e watch com evento real via fs em tempdir.
+# P7b — Chave NVIDIA via .env
+
+**Data:** 2026-10-08.
+
+## Mudanças
+
+- `memory` agora carrega `{cwd}/.env` provisoriamente (`KEY=VALUE`, sem sobrescrever env real) — conveniência para uso local (bench MCP/CLI). Nunca versionado (.gitignore).
+
+## Verificação de produção (ao vivo)
+
+- Sync com chave: 3 notas embedadas em 1.9s (dim 2048).
+- Search híbrida: 'redes neurais e inteligência artificial' → a nota de embeddings rankeada via keyword+semantic, degraded=false.
+- Re-sync imediato: `indexadas 0/3` — embed-guard **evita** re-chamadas com file_state.embedded=true.
+- MCP (opencode) lê a mesma `.env` do diretório de trabalho do servidor (`mcp-demo/`)
+

@@ -41,9 +41,31 @@ impl EmbedPort for NullEmbed {
     }
 }
 
+fn try_load_dotenv(cwd: &Path) {
+    // Conveniência para 'subir e pronto': linhas KEY=VALUE do `.env` local
+    // (gitignored) são exportadas APENAS se ausentes — env real sempre vence.
+    let Ok(raw) = std::fs::read_to_string(cwd.join(".env")) else {
+        return;
+    };
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            let key = key.trim();
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            if std::env::var_os(key).is_none() {
+                std::env::set_var(key, value);
+            }
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    try_load_dotenv(&cwd);
     match dispatch(&args, &cwd) {
         Ok(out) => {
             if !out.is_empty() {
@@ -519,5 +541,26 @@ mod tests {
         // O delta do watch indexou no store: `read` resolve sem novo sync.
         let out = run(&["read".into(), "Knowledge/live.md".into()], cwd).unwrap();
         assert!(out.contains("conteudo ao vivo"));
+    }
+
+    #[test]
+    fn dotenv_loads_new_vars_only() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            "SEGUNDOM_TESTE_DOTENV=de_arquivo\n# comentario\nSEGUNDOM_EXISTENTE=do_env\n",
+        )
+        .unwrap();
+        std::env::set_var("SEGUNDOM_EXISTENTE", "pre");
+        try_load_dotenv(dir.path());
+        assert_eq!(
+            std::env::var("SEGUNDOM_TESTE_DOTENV").as_deref(),
+            Ok("de_arquivo")
+        );
+        assert_eq!(
+            std::env::var("SEGUNDOM_EXISTENTE").as_deref(),
+            Ok("pre"),
+            "env real deve vencer o .env"
+        );
     }
 }
