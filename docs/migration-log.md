@@ -510,3 +510,20 @@ Bin testa init→create→read→search→stats→sync→doctor(+reindex offline
   `similar "receita de bolo"` → Bolo 0.544 / Embeddings 0.143 / Home 0.045
   (ranking por cosseno); `context "semântica"` → SOURCE/TITLE/RELEVANCE + snippet;
   backlinks/adr_list respondem estruturas corretas.
+
+# P7d — MCP project_* + correção de falso conflito (double-encoding de FM)
+
+**Data:** 2026-10-08.
+
+## Mudanças
+
+- **BUG (double-encoding de FM, `crates/second-brain-infra/src/store.rs`)**: `frontmatter_to_json` serializava valores `Str` com `{:?}` sobre um JSON já serializado (`format!("{}:{:?}", to_string(k), to_string(s))`), gravando `{"title":"\"Beta\""}`; a releitura recuperava `Str("\"Beta\"")` com aspas literais. Corrigido para `{}` (o braço `List` já estava correto). Regressão: `frontmatter_json_roundtrip_preserves_string_values`.
+- **BUG (falso conflito em `persist_note`, `crates/second-brain-core/src/app/application.rs`)**: o check de conflito externo comparava o FM on-disk (que inclui `tags`/`links`, mesclados por `to_markdown`) contra `previous.frontmatter()`, que em notas criadas por `Note::create` guarda só `title` (tags/links ficam em colunas/vetores). Resultado: qualquer `set_project`/`update` em nota com tags abortava com "conflito: ... alterado externamente". Corrigido: `fm_differs` substituído por `fm_entries_differ` comparando `frontmatter_from_raw(&raw).entries()` contra `effective_entries(&previous)` (FM ∪ tags ∪ links), mantendo o guard `faithful`. `effective_entries` passou a `pub(crate)`.
+- **MCP `project_*` (4 tools)**: `project_create`/`project_list`/`project_show`/`project_link` em `mcp.rs`; contratos `ProjectSummary/ProjectNote/ProjectShow` (camelCase). Total 15/16 — falta apenas `second_brain_exec` (decisão explícita do usuário).
+
+## Verificação (testes + prova ao vivo)
+
+- 9 bin (+1), 98 core (+1), 65 infra (+1) = **172 testes**; `clippy -D warnings` e `fmt` limpos.
+- Core: `project_list_show_and_link` passa (StubParser não pegava o bug por `faithful=false`).
+- MCP/infra real: `project_create_list_show_and_link` passa (era o teste que expunha o falso conflito).
+- Prova ao vivo (`/tmp/opencode/probe`): `project_link` vinculou `Knowledge/b.md` sem falso conflito; arquivo ganhou `project`/`updated` corretamente.

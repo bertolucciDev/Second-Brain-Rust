@@ -169,7 +169,7 @@ fn frontmatter_to_json(fm: &Frontmatter) -> String {
         .iter()
         .map(|(k, v)| match v {
             FmValue::Str(s) => format!(
-                "{}:{:?}",
+                "{}:{}",
                 serde_json::to_string(k).unwrap_or_default(),
                 serde_json::to_string(s).unwrap_or_default()
             ),
@@ -814,6 +814,35 @@ mod tests {
         store.delete_note("Knowledge/A").unwrap();
         assert_eq!(store.count_notes().unwrap(), 0);
         assert!(store.get_note("Knowledge/A").unwrap().is_none());
+        store.close();
+    }
+
+    #[test]
+    fn frontmatter_json_roundtrip_preserves_string_values() {
+        // Regressão: `frontmatter_to_json` dobrava as aspas dos valores string
+        // (`{:?}` sobre um JSON já serializado), corrompendo o FM na releitura.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("index.db");
+        let mut store = SqliteStore::new();
+        store.open(db.to_str().unwrap()).unwrap();
+
+        let note = Note::create(
+            "Knowledge/Beta.md",
+            "Beta",
+            "body",
+            None,
+            &["backlog"],
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
+        store.put_note(&note).unwrap();
+        let got = store.get_note("Knowledge/Beta").unwrap().unwrap();
+        assert_eq!(
+            got.frontmatter().get("title"),
+            Some(&FmValue::Str("Beta".into()))
+        );
         store.close();
     }
 

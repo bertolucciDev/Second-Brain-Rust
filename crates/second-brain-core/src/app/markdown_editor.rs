@@ -155,7 +155,7 @@ fn fm_updated_differs(yaml: &str, note: &Note) -> bool {
 /// (caso das notas criadas por `Note::create`/`toMarkdown`, onde tags/links
 /// saem dos vetores e não do FM). O arquivo está sempre com esses campos; se o
 /// editor os ignorasse, uma edição os apagaria do arquivo (data loss P6).
-fn effective_entries(note: &Note) -> Vec<(String, FmValue)> {
+pub(crate) fn effective_entries(note: &Note) -> Vec<(String, FmValue)> {
     let mut out = note.frontmatter().entries();
     let has_tags = out.iter().any(|(k, _)| k == "tags");
     if !has_tags {

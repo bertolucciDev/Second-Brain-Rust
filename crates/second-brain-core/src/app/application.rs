@@ -5,17 +5,18 @@ use serde_json::Value;
 use super::config::{Config, SearchStrategy};
 use super::contract::{
     AdrSummary, BacklinksOutput, ContextDoc, DoctorFinding, DoctorLevel, GraphOutput, InitResult,
-    NoteRef, ReindexResult, SearchQuery, SearchResult, SessionSummary, SyncResult, VaultStats,
+    NoteRef, ProjectNote, ProjectShow, ProjectSummary, ReindexResult, SearchQuery, SearchResult,
+    SessionSummary, SyncResult, VaultStats,
 };
 use super::error::{AppError, Result};
-use super::markdown_editor::MarkdownEditor;
+use super::markdown_editor::{effective_entries, MarkdownEditor};
 use super::paths::path_is_inside;
 use super::ports::{
     CommandRunner, CommandSpec, ConfigStore, EmbedPort, FileState, ParserPort, SearchPort,
     StorePort, VaultEvent, VaultEventType, VaultPort,
 };
 use crate::domain::entities::{Adr, GraphEdge, GraphNode, KnowledgeGraph, Note, Project, Session};
-use crate::domain::frontmatter::Frontmatter;
+use crate::domain::frontmatter::{FmValue, Frontmatter};
 use crate::domain::vo::ProjectId;
 
 /// Requisição de criação de nota (espelha `Note.create` do CLI `create`).
@@ -134,16 +135,19 @@ fn replace_status_line(content: &str, status: &str) -> String {
     }
 }
 
-/// Dois frontmatters são "iguais" valor a valor (bidirecional). Usado no
-/// check de conflito externo do persist (P6).
-fn fm_differs(a: &Note, b: &Note) -> bool {
-    for (k, v) in a.frontmatter().entries() {
-        if b.frontmatter().get(&k) != Some(&v) {
+/// Compara duas listas de entradas de FM (ordem-insensível). Usado no check de
+/// conflito externo: o arquivo on-disk é comparado contra as entradas
+/// **efetivas** da nota indexada (FM ∪ tags ∪ links), pois o arquivo sempre
+/// carrega tags/links emitidos por `to_markdown`, enquanto o FM persistido de
+/// notas criadas por `Note::create` os guarda em campos separados.
+fn fm_entries_differ(a: &[(String, FmValue)], b: &[(String, FmValue)]) -> bool {
+    for (k, v) in a {
+        if b.iter().find(|(bk, _)| bk == k).map(|(_, bv)| bv) != Some(v) {
             return true;
         }
     }
-    for (k, v) in b.frontmatter().entries() {
-        if a.frontmatter().get(&k) != Some(&v) {
+    for (k, v) in b {
+        if a.iter().find(|(ak, _)| ak == k).map(|(_, av)| av) != Some(v) {
             return true;
         }
     }
@@ -359,12 +363,20 @@ impl Application {
         if let Some(previous) = self.store.get_note(note.id().value())? {
             let on_disk = self.parser.parse_note(path, &raw)?;
             // Conteúdo é comparado contra o corpo do raw (sem FM), pois o body
-            // indexado vem do parser; FM é comparado só quando o parser em uso
+            // indexado vem do parser; FM é comparado contra as entradas
+            // **efetivas** da nota indexada (FM ∪ tags ∪ links, o mesmo que
+            // `to_markdown` grava no arquivo) e só quando o parser em uso
             // reproduz fielmente o frontmatter do arquivo (StubParser/limitados
             // não preservam tags → comparar geraria falso conflito).
             let body_raw = strip_frontmatter(&raw);
             let faithful = frontmatter_from_raw(&raw).entries() == on_disk.frontmatter().entries();
-            if body_raw != previous.content() || (faithful && fm_differs(&on_disk, &previous)) {
+            if body_raw != previous.content()
+                || (faithful
+                    && fm_entries_differ(
+                        &on_disk.frontmatter().entries(),
+                        &effective_entries(&previous),
+                    ))
+            {
                 return Err(AppError::Vault(format!(
                     "conflito: {path} foi alterado externamente desde a última indexação"
                 )));
@@ -958,6 +970,55 @@ impl Application {
         )?;
         self.persist_note(&updated)?;
         Ok(updated)
+    }
+
+    /// `project_list` — projetos (notas com tag `project`), com contagem de
+    /// notas vinculadas (espelha o MCP legado).
+    pub fn project_list(&mut self) -> Result<Vec<ProjectSummary>> {
+        let all = self.store.all_notes()?;
+        let mut items = Vec::new();
+        for note in &all {
+            let tags: Vec<String> = note.tags().iter().map(|t| t.value().to_string()).collect();
+            if !tags.iter().any(|t| t == "project") {
+                continue;
+            }
+            let pid = note
+                .project_id()
+                .map(|p| p.value().to_string())
+                .unwrap_or_default();
+            let count = all
+                .iter()
+                .filter(|nn| nn.project_id().map(|p| p.value()) == Some(pid.as_str()))
+                .count();
+            items.push(ProjectSummary {
+                name: pid.clone(),
+                title: note.title().to_string(),
+                notes: count,
+                path: note.path().to_string(),
+            });
+        }
+        Ok(items)
+    }
+
+    /// `project_show` — nota(s) vinculadas a um projeto.
+    pub fn project_show(&mut self, project_id: &str) -> Result<ProjectShow> {
+        let all = self.store.all_notes()?;
+        let notes: Vec<&Note> = all
+            .iter()
+            .filter(|n| n.project_id().map(|p| p.value()) == Some(project_id))
+            .collect();
+        Ok(ProjectShow {
+            project_id: project_id.to_string(),
+            notes: notes.len(),
+            items: notes
+                .iter()
+                .map(|n| ProjectNote {
+                    title: n.title().to_string(),
+                    path: n.path().to_string(),
+                    tags: n.tags().iter().map(|t| t.value().to_string()).collect(),
+                })
+                .collect(),
+        })
     }
 
     /// `project create` — cria nota índice + nota de arquitetura (espelha CLI).
@@ -1869,6 +1930,43 @@ mod tests {
         assert!(adrs
             .iter()
             .any(|a| a.status == "accepted" && a.title == "Gamma"));
+    }
+
+    #[test]
+    fn project_list_show_and_link() {
+        let mut app = test_app();
+        let p = app
+            .create_project("Alpha Proj", "desc", None, None, None)
+            .unwrap();
+        let pid = p.id().value().to_string();
+
+        // lista: 1 projeto via tag `project`, contando notas vinculadas (2).
+        let list = app.project_list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, pid);
+        assert_eq!(list[0].notes, 2);
+
+        // show: as 2 notas do projeto.
+        let show = app.project_show(&pid).unwrap();
+        assert_eq!(show.project_id, pid);
+        assert_eq!(show.notes, 2);
+        assert!(show.items.iter().any(|n| n.path.ends_with("index.md")));
+        assert!(show
+            .items
+            .iter()
+            .any(|n| n.path.ends_with("Architecture.md")));
+
+        // link: nota fora vinculada ao projeto (espelha tool project_link).
+        app.create_note(CreateNoteRequest {
+            path: "Knowledge/z.md".into(),
+            title: Some("Zeta".into()),
+            content: "zeta body".into(),
+            tags: vec![],
+            links: vec![],
+        })
+        .unwrap();
+        app.set_project("Knowledge/z", &pid).unwrap();
+        assert_eq!(app.project_show(&pid).unwrap().notes, 3);
     }
 
     #[test]

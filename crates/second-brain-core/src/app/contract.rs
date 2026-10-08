@@ -221,3 +221,31 @@ pub struct AdrSummary {
     pub path: String,
     pub status: String,
 }
+
+/// Item do `project_list` (espelha o MCP legado).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSummary {
+    pub name: String,
+    pub title: String,
+    pub notes: usize,
+    pub path: String,
+}
+
+/// Nota dentro do `project_show`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectNote {
+    pub title: String,
+    pub path: String,
+    pub tags: Vec<String>,
+}
+
+/// `project_show` — notas vinculadas a um projeto.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectShow {
+    pub project_id: String,
+    pub notes: usize,
+    pub items: Vec<ProjectNote>,
+}

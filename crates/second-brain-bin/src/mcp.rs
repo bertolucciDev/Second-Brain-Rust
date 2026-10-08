@@ -3,8 +3,9 @@
 //! tools/list preservado a partir da fixture capturada na P0.
 //!
 //! Implementado nesta fase: search/read/create/stats/graph/info/adr_create/
-//! similar/context/backlinks/adr_list; o restante do contrato (16 tools)
-//! responde "not implemented" com erro JSON-RPC claro até as próximas fases.
+//! similar/context/backlinks/adr_list/project_create/project_list/project_show/
+//! project_link; falta apenas `second_brain_exec` (decisão explícita do usuário —
+//! executa comando arbitrário) para fechar o contrato de 16 tools.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -260,6 +261,33 @@ fn call_tool(name: &str, args: &Value, app: &mut Application) -> Result<Value> {
             let items = app.adr_list()?;
             Ok(json!({ "total": items.len(), "items": items }))
         }
+        "second_brain_project_create" => {
+            let project =
+                app.create_project(&s(args, "name"), &s(args, "description"), None, None, None)?;
+            Ok(json!({
+                "created": true,
+                "id": project.id().value(),
+                "name": s(args, "name"),
+            }))
+        }
+        "second_brain_project_list" => {
+            let items = app.project_list()?;
+            Ok(serde_json::to_value(&items)
+                .map_err(ser_err)
+                .map(|v| json!({ "total": items.len(), "items": v }))?)
+        }
+        "second_brain_project_show" => {
+            let out = app.project_show(&s(args, "id"))?;
+            Ok(serde_json::to_value(&out).map_err(ser_err)?)
+        }
+        "second_brain_project_link" => {
+            let note = app.set_project(&s(args, "notePath"), &s(args, "projectId"))?;
+            Ok(json!({
+                "linked": true,
+                "note": note.path(),
+                "project": s(args, "projectId"),
+            }))
+        }
         other => Err(AppError::InvalidInput(format!(
             "tool '{other}' ainda não implementada na falha de migração Rust (P7) — \
              disponível no legado TS enquanto durar a transição"
@@ -431,5 +459,38 @@ mod tests {
         assert!(items
             .iter()
             .any(|i| i["status"] == "accepted" && i["title"] == "Gamma"));
+    }
+
+    #[test]
+    fn project_create_list_show_and_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = setup_app(&dir);
+
+        let out = call(
+            "second_brain_project_create",
+            &json!({"name": "Alpha Proj", "description": "desc"}),
+            &mut app,
+        );
+        assert_eq!(out["created"], true);
+        let pid = out["id"].as_str().unwrap().to_string();
+
+        let list = call("second_brain_project_list", &json!({}), &mut app);
+        assert_eq!(list["total"].as_u64().unwrap(), 1);
+        assert_eq!(list["items"][0]["name"], pid);
+        assert_eq!(list["items"][0]["notes"].as_u64().unwrap(), 2);
+
+        let show = call("second_brain_project_show", &json!({"id": pid}), &mut app);
+        assert_eq!(show["projectId"], pid);
+        assert_eq!(show["notes"].as_u64().unwrap(), 2);
+
+        let link = call(
+            "second_brain_project_link",
+            &json!({"projectId": pid, "notePath": "Knowledge/b.md"}),
+            &mut app,
+        );
+        assert_eq!(link["linked"], true);
+        assert_eq!(link["project"], pid);
+        let show2 = call("second_brain_project_show", &json!({"id": pid}), &mut app);
+        assert_eq!(show2["notes"].as_u64().unwrap(), 3);
     }
 }
